@@ -1,43 +1,70 @@
 # CLI release checklist
 
-## Pre-flight
-
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] `cargo test --workspace`
-- [ ] `scripts/smoke-cli.ps1` (Windows) or equivalent
-- [ ] `python tools/network-audit/check_offline_deps.py`
-- [ ] `docs/licenses-checklist.md` reviewed for binary deps
-- [ ] CHANGELOG updated
-
-## Version
-
-1. Bump `workspace.package.version` in root `Cargo.toml` if needed  
-2. Tag: `git tag v0.1.0-cli.1`  
-3. Push tag → `.github/workflows/release.yml` builds multi-OS `rradar` artifacts  
-
-## Install from source
+## Pre-flight (local)
 
 ```bash
-cargo install --path crates/rradar-cli --locked
-rradar doctor
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --locked
+cargo build --release -p rradar-cli --locked
+./target/release/rradar version --long
+./target/release/rradar demo --fixtures fixtures --db /tmp/rradar-rel-demo.db --quiet
+python tools/network-audit/check_offline_deps.py
 ```
 
-Windows helper: `scripts/install-cli.ps1`
+Windows:
 
-## Smoke after install
+```powershell
+powershell -File scripts/smoke-cli.ps1
+powershell -File scripts/demo.ps1
+```
+
+Also:
+
+- [ ] `docs/licenses-checklist.md` reviewed for binary deps  
+- [ ] CHANGELOG updated  
+- [ ] `docs/INSTALL.md` still accurate for artifact names  
+
+## Version & tag
+
+1. Optionally bump `workspace.package.version` in root `Cargo.toml`  
+2. Commit on `master`  
+3. Tag (lightweight or annotated):
 
 ```bash
-rradar init
-rradar process fixtures/text/familymart_89.txt --confirm -q
-rradar list
-rradar stats --all
-# From a checkout with fixtures/:
-rradar demo --quiet
+git tag -a v0.1.0-cli.N -m "describe the milestone"
+git push origin master
+git push origin v0.1.0-cli.N
 ```
 
-## Not in CLI release
+4. Tag push runs [`.github/workflows/release.yml`](../.github/workflows/release.yml):
+   - Linux x86_64, Windows MSVC, macOS Intel, **macOS aarch64**
+   - `--locked` release build + `version --long` smoke
+   - Archives + per-file SHA-256 + GitHub Release notes  
 
-- Real ONNX weights (separate asset)  
+## CI gates (every PR / push)
+
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml):
+
+| Step | Purpose |
+|------|---------|
+| fmt / clippy / test `--locked` | Correctness |
+| `rradar-ffi` tests | Mobile contract |
+| cli smoke + demo | Product path |
+| **release binary smoke** | `cargo build --release` + demo |
+| network audit | No surprise egress in source |
+
+## Install from release
+
+Users: [INSTALL.md](./INSTALL.md) · helpers `scripts/install-from-release.sh` / `.ps1`.
+
+## Not in CLI release assets
+
+- Real ONNX weights (fetch separately; `models/README.md`)  
 - Flutter APK  
 - Official sync / cloud  
+
+## Rollback
+
+- Ledger migrations are **forward-only**; keep a `backup.rradar` before major upgrades.  
+- Users on newer schema need a newer binary (`SchemaTooNew`).  

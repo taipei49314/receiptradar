@@ -42,3 +42,16 @@ fetch-models:
 
 cli-onnx *args:
     cargo run -q -p rradar-cli --features onnx -- {{args}}
+
+# Full local gate (matches CI spirit)
+ci-local:
+    cargo fmt --all -- --check
+    cargo clippy --workspace --all-targets -- -D warnings
+    cargo test --workspace --locked
+    cargo build --release -p rradar-cli --locked
+    ./target/release/rradar version --long
+
+release-smoke:
+    cargo build --release -p rradar-cli --locked
+    ./target/release/rradar version --long
+    ./target/release/rradar demo --fixtures fixtures --db target/release-smoke/ledger.db --quiet

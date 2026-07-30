@@ -131,12 +131,27 @@
 - Mobile closed-loop Rust API is callable from tests; UI can develop against Mock
 - FRB still deferred until Flutter is on the machine
 
+## Cycle 15 — release & CI skeleton (main axis #4)
+
+### Plan
+1. CI: `--locked` tests, ffi job step, **release binary smoke** (`cargo build --release` + demo)
+2. Release: macOS aarch64 matrix, package LICENSE/README/VERSION, flatten artifacts + SHA256SUMS
+3. Install: `docs/INSTALL.md`, `install-from-release.sh`/`.ps1`, unix `install-cli.sh`
+4. `rradar version --long|--json` for release verification
+
+### Verify
+- `cargo test --workspace --locked` / clippy green  
+- Local release smoke path documented in Justfile  
+
+### Result
+- Tag `v*` → 4 platform artifacts with checksums; CI gates include release-shaped build  
+
 ### Next seeds
 | Priority | Item |
 |----------|------|
-| P1 | Keep CI green |
-| P2 | FRB generate when Flutter present; Android NDK link |
-| P3 | Release/CI polish; ONNX hash pin |
+| P1 | Keep CI green on all matrix OS |
+| P2 | FRB when Flutter present |
+| P3 | ONNX hash pin after trusted model download |
 
 ## Rules
 - No questions between cycles unless secrets / destructive remote  

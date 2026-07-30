@@ -27,10 +27,7 @@ fn main() -> ExitCode {
                 Ok(())
             }
         }
-        "version" | "--version" | "-V" => {
-            println!("{PRODUCT_ID} {VERSION}");
-            Ok(())
-        }
+        "version" | "--version" | "-V" => cmd_version(&args[1..]),
         "init" => cmd_init(&args[1..]),
         "config" => cmd_config(&args[1..]),
         "doctor" => cmd_doctor(&args[1..]),
@@ -68,6 +65,39 @@ fn main() -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+// --- version / release probe -----------------------------------------------
+
+fn cmd_version(args: &[String]) -> Result<(), String> {
+    let long = args
+        .iter()
+        .any(|a| a == "--long" || a == "-l" || a == "--verbose");
+    let json = args.iter().any(|a| a == "--json");
+    if json {
+        let onnx = rradar_ocr::onnx_feature_enabled();
+        println!(
+            "{{\n  \"product_id\": \"{PRODUCT_ID}\",\n  \"version\": \"{VERSION}\",\n  \"ledger_schema\": {LEDGER_SCHEMA_VERSION},\n  \"onnx_feature\": {onnx},\n  \"os\": \"{}\",\n  \"arch\": \"{}\"\n}}",
+            env::consts::OS,
+            env::consts::ARCH
+        );
+        return Ok(());
+    }
+    println!("{PRODUCT_ID} {VERSION}");
+    if long {
+        println!("ledger_schema | {LEDGER_SCHEMA_VERSION}");
+        println!(
+            "onnx_feature  | {}",
+            if rradar_ocr::onnx_feature_enabled() {
+                "enabled"
+            } else {
+                "disabled (build with --features onnx)"
+            }
+        );
+        println!("target        | {}-{}", env::consts::OS, env::consts::ARCH);
+        println!("policy        | local-first; no official cloud relay");
+    }
+    Ok(())
 }
 
 // --- shared flag helpers ---------------------------------------------------

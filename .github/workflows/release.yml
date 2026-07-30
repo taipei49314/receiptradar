@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build:
-    name: build (${{ matrix.os }})
+    name: build (${{ matrix.artifact }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -23,6 +23,8 @@ jobs:
             artifact: rradar-x86_64-pc-windows-msvc
           - os: macos-latest
             artifact: rradar-x86_64-apple-darwin
+          - os: macos-14
+            artifact: rradar-aarch64-apple-darwin
     steps:
       - uses: actions/checkout@v4
 
@@ -31,33 +33,53 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build release CLI
-        run: cargo build --release -p rradar-cli
+        run: cargo build --release -p rradar-cli --locked
+
+      - name: Smoke binary
+        shell: bash
+        run: |
+          if [[ -f target/release/rradar.exe ]]; then B=target/release/rradar.exe; else B=target/release/rradar; fi
+          "$B" version --long
+          "$B" help >/dev/null
 
       - name: Package (unix)
         if: runner.os != 'Windows'
+        shell: bash
         run: |
-          cp target/release/rradar "${{ matrix.artifact }}"
-          tar -czf "${{ matrix.artifact }}.tar.gz" "${{ matrix.artifact }}"
-          shasum -a 256 "${{ matrix.artifact }}.tar.gz" > "${{ matrix.artifact }}.sha256"
+          set -euo pipefail
+          STAGE="${{ matrix.artifact }}"
+          mkdir -p "$STAGE"
+          cp "target/release/rradar" "$STAGE/rradar"
+          cp LICENSE "$STAGE/"
+          cp README.md "$STAGE/"
+          cp docs/INSTALL.md "$STAGE/" 2>/dev/null || true
+          printf '%s\n' "${{ github.ref_name }}" > "$STAGE/VERSION"
+          tar -czf "${STAGE}.tar.gz" "$STAGE"
+          shasum -a 256 "${STAGE}.tar.gz" | tee "${STAGE}.sha256"
 
       - name: Package (windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Copy-Item target/release/rradar.exe "${{ matrix.artifact }}.exe"
-          Compress-Archive -Path "${{ matrix.artifact }}.exe" -DestinationPath "${{ matrix.artifact }}.zip"
-          Get-FileHash "${{ matrix.artifact }}.zip" -Algorithm SHA256 |
-            ForEach-Object { "$($_.Hash.ToLower())  ${{ matrix.artifact }}.zip" } |
-            Set-Content "${{ matrix.artifact }}.sha256"
+          $stage = "${{ matrix.artifact }}"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item target/release/rradar.exe "$stage/rradar.exe"
+          Copy-Item LICENSE "$stage/"
+          Copy-Item README.md "$stage/"
+          if (Test-Path docs/INSTALL.md) { Copy-Item docs/INSTALL.md "$stage/" }
+          Set-Content -Path "$stage/VERSION" -Value "${{ github.ref_name }}" -NoNewline
+          Compress-Archive -Path $stage -DestinationPath "$stage.zip" -Force
+          $hash = (Get-FileHash "$stage.zip" -Algorithm SHA256).Hash.ToLower()
+          Set-Content -Path "$stage.sha256" -Value "$hash  $stage.zip"
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: |
-            ${{ matrix.artifact }}.*
-            ${{ matrix.artifact }}
+            ${{ matrix.artifact }}.tar.gz
+            ${{ matrix.artifact }}.zip
+            ${{ matrix.artifact }}.sha256
 
-  # Tag push: attach artifacts to GitHub Release (requires permissions.contents write)
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
@@ -66,7 +88,39 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
+      - name: Flatten artifacts + combined checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-out
+          find dist -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' \) -exec cp -v {} release-out/ \;
+          cd release-out
+          ls -la
+          cat *.sha256 > SHA256SUMS.txt || true
+          cat SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/**/*
+          files: release-out/*
           generate_release_notes: true
+          body: |
+            ## ReceiptRadar CLI
+
+            Local-first receipt → ledger. **No cloud. No account.**
+
+            ### Install
+
+            See [docs/INSTALL.md](https://github.com/taipei49314/receiptradar/blob/master/docs/INSTALL.md).
+
+            ```bash
+            # verify download
+            sha256sum -c rradar-*.sha256
+            ```
+
+            ### Smoke
+
+            ```bash
+            ./rradar version --long
+            ./rradar demo --quiet   # needs fixtures checkout
+            ```
+
+            ONNX weights are **not** bundled; optional `--features onnx` build + `tools/fetch-models.*`.

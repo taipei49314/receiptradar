@@ -21,9 +21,13 @@ v0.1 is a **thin vertical slice**. Please read the design doc before large PRs:
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cargo run -p rradar-cli -- version
+cargo test --workspace --locked
+cargo run -p rradar-cli -- version --long
+# optional local CI mirror (needs `just`):
+# just ci-local
 ```
+
+Release tags (`v*`) build multi-OS binaries — see [docs/RELEASE.md](./docs/RELEASE.md).
 
 ### Commit style
 

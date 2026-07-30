@@ -97,6 +97,25 @@ fn init_process_list_stats_export_edit_delete() {
 }
 
 #[test]
+fn version_long_and_json() {
+    let out = bin().args(["version"]).output().unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("receiptradar"));
+
+    let out = bin().args(["version", "--long"]).output().unwrap();
+    assert!(out.status.success());
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(s.contains("ledger_schema"), "{s}");
+    assert!(s.contains("local-first"), "{s}");
+
+    let out = bin().args(["version", "--json"]).output().unwrap();
+    assert!(out.status.success());
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(s.contains("\"product_id\""), "{s}");
+    assert!(s.contains("\"ledger_schema\""), "{s}");
+}
+
+#[test]
 fn backup_info_verify_and_merge() {
     let fx = fixtures();
     let home = std::env::temp_dir().join(format!("rradar-bak-test-{}", std::process::id()));

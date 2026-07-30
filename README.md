@@ -14,12 +14,18 @@ Offline receipt → ledger. Local-first. No account.
 
 ## Install & one-click demo
 
+Cross-platform install: **[docs/INSTALL.md](./docs/INSTALL.md)** (source, GitHub Release binaries, ONNX).
+
 ```bash
-cargo install --path crates/rradar-cli
+cargo install --path crates/rradar-cli --locked
+rradar version --long
 # From repo root — full closed loop (parse → ledger → stats → export → backup)
 rradar demo
 # Windows helper:
 #   powershell -File scripts/demo.ps1
+# Binary from latest GitHub Release:
+#   ./scripts/install-from-release.sh
+#   powershell -File scripts/install-from-release.ps1
 ```
 
 Daily use after `rradar init`:

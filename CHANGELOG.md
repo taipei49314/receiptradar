@@ -3,6 +3,7 @@
 ## 0.1.0-alpha (unreleased)
 
 ### Added
+- **Release/CI skeleton:** locked CI + release binary smoke; GitHub Release packages (incl. macOS aarch64) with LICENSE/VERSION/checksums; `docs/INSTALL.md`; `install-from-release.sh`/`.ps1`; `rradar version --long|--json`
 - **Mobile FFI surface** (`rradar-ffi`): process path/bytes, ledger CRUD, stats/top, backup file, capabilities; `staticlib`/`cdylib`; Dart `RradarApi` mock + `docs/ffi.md`
 - **Ledger schema v2** + forward migrations (`LEDGER_SCHEMA_VERSION`); `updated_at`; `rradar migrate`; `docs/ledger-schema.md`
 - **Backup UX:** `backup info|verify`, `restore --merge`, `import backup`; manifest `ledger_schema_version`

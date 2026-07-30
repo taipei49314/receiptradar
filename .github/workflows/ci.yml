@@ -35,16 +35,27 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: test
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
+
+      - name: ffi surface
+        run: cargo test -p rradar-ffi --locked
 
       - name: cli smoke
         run: |
-          cargo run -p rradar-cli -- version
-          cargo run -p rradar-cli -- process fixtures/text/familymart_89.txt
-          cargo run -p bench-ocr -- fixtures/text
+          cargo run -p rradar-cli --locked -- version
+          cargo run -p rradar-cli --locked -- version --long
+          cargo run -p rradar-cli --locked -- process fixtures/text/familymart_89.txt
+          cargo run -p bench-ocr --locked -- fixtures/text
 
       - name: demo closed-loop
-        run: cargo run -p rradar-cli -- demo --fixtures fixtures --db target/ci-demo/ledger.db --quiet
+        run: cargo run -p rradar-cli --locked -- demo --fixtures fixtures --db target/ci-demo/ledger.db --quiet
+
+      - name: release binary smoke
+        run: |
+          cargo build --release -p rradar-cli --locked
+          ./target/release/rradar version --long
+          ./target/release/rradar demo --fixtures fixtures --db target/ci-release-demo/ledger.db --quiet
+        shell: bash
 
       - name: network audit
         run: python tools/network-audit/check_offline_deps.py
