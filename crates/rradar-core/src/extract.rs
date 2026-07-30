@@ -9,8 +9,10 @@ use std::sync::OnceLock;
 fn re_amount() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
+        // Prefer full integers / decimals before the "1-3 digits + optional groups" form,
+        // otherwise "1280" is matched as "128".
         Regex::new(
-            r"(?i)(?:NT\$|TWD|USD|\$|¥|円|€)?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)",
+            r"(?i)(?:NT\$|TWD|USD|\$|¥|円|€)?\s*([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]+\.[0-9]{1,2}|[0-9]+)",
         )
         .expect("amount re")
     })
@@ -331,5 +333,13 @@ mod tests {
         let b = blocks(&["CAFE", "SUBTOTAL 10.00", "TOTAL 11.00"]);
         let f = extract_l1_fields(&b, Iso4217::USD, &mut ex);
         assert_eq!(f.total.unwrap().value.amount_minor, 1100);
+    }
+
+    #[test]
+    fn four_digit_total_not_truncated() {
+        let mut ex = ExplainTrace::new("mock", "ocr");
+        let b = blocks(&["好市多", "合計 1280"]);
+        let f = extract_l1_fields(&b, Iso4217::TWD, &mut ex);
+        assert_eq!(f.total.unwrap().value.amount_minor, 128_000);
     }
 }
