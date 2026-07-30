@@ -33,6 +33,7 @@ fn main() -> ExitCode {
         "init" => cmd_init(&args[1..]),
         "config" => cmd_config(&args[1..]),
         "doctor" => cmd_doctor(&args[1..]),
+        "demo" => cmd_demo(&args[1..]),
         "process" | "add" => cmd_process(&args[1..]),
         "manual" | "entry" => cmd_manual(&args[1..]),
         "import" => cmd_import(&args[1..]),
@@ -175,7 +176,13 @@ fn cmd_doctor(_args: &[String]) -> Result<(), String> {
     let db = default_db_path();
     if db.is_file() {
         match rradar_core::Ledger::open(&db) {
-            Ok(l) => println!("  ledger:   ok ({} transactions)", l.count().unwrap_or(-1)),
+            Ok(l) => {
+                let ver = l.schema_version().unwrap_or_else(|_| "?".into());
+                println!(
+                    "  ledger:   ok (schema {ver}, {} transactions)",
+                    l.count().unwrap_or(-1)
+                );
+            }
             Err(e) => println!("  ledger:   error ({e})"),
         }
     } else {
@@ -205,7 +212,335 @@ fn cmd_doctor(_args: &[String]) -> Result<(), String> {
         }
     );
     println!("  privacy:  local-first; no network required for core path");
+    println!("  demo:     rradar demo   # isolated closed-loop from fixtures/");
     Ok(())
+}
+
+/// Recordable closed-loop demo: fixtures → parse → confirm → list/stats → export → backup.
+/// Uses an isolated demo ledger (does not touch the default user ledger unless --db set).
+fn cmd_demo(args: &[String]) -> Result<(), String> {
+    let mut fixtures_root: Option<PathBuf> = None;
+    let mut db_override: Option<PathBuf> = None;
+    let mut skip_backup = false;
+    let mut quiet = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--fixtures" => {
+                i += 1;
+                fixtures_root = Some(PathBuf::from(args.get(i).ok_or("--fixtures needs path")?));
+            }
+            "--db" => {
+                i += 1;
+                db_override = Some(PathBuf::from(args.get(i).ok_or("--db needs path")?));
+            }
+            "--no-backup" => skip_backup = true,
+            "--quiet" | "-q" => quiet = true,
+            "--help" | "-h" => {
+                print_topic_help("demo")?;
+                return Ok(());
+            }
+            other => {
+                return Err(format!(
+                    "unknown demo flag `{other}` — try `rradar help demo`"
+                ))
+            }
+        }
+        i += 1;
+    }
+
+    let fixtures = fixtures_root
+        .or_else(|| env::var_os("RRADAR_FIXTURES").map(PathBuf::from))
+        .unwrap_or_else(find_fixtures_dir);
+    if !fixtures.is_dir() {
+        return Err(format!(
+            "fixtures not found at {} — run from repo root or pass --fixtures PATH",
+            fixtures.display()
+        ));
+    }
+
+    let demo_db = if let Some(p) = db_override {
+        p
+    } else if env::var_os("RRADAR_DB").is_some() {
+        default_db_path()
+    } else {
+        let home = data_dir().join("demo");
+        let _ = std::fs::create_dir_all(&home);
+        home.join("ledger.db")
+    };
+    if let Some(parent) = demo_db.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // Fresh demo ledger each run (isolated path by default).
+    if demo_db.is_file() {
+        let _ = std::fs::remove_file(&demo_db);
+    }
+    let ledger = rradar_core::Ledger::open(&demo_db).map_err(|e| e.to_string())?;
+    let eng = engine_by_name("mock").map_err(|e| e.to_string())?;
+    let categories = CategoryEngine::with_seed();
+
+    if !quiet {
+        println!("══════════════════════════════════════════════");
+        println!(" ReceiptRadar demo — local-first closed loop");
+        println!(" No cloud. No account. Fixtures only.");
+        println!("══════════════════════════════════════════════");
+        println!("fixtures | {}", fixtures.display());
+        println!("demo db  | {}", demo_db.display());
+        println!("schema   | {}", ledger.schema_version().unwrap_or_default());
+        println!();
+    }
+
+    // Collect demo inputs: all text fixtures + mock_ocr + one QR sample.
+    let mut text_paths = collect_glob(&fixtures.join("text"), &["txt"]);
+    text_paths.sort();
+    let mut mock_paths = collect_glob(&fixtures.join("mock_ocr"), &["bin"]);
+    mock_paths.sort();
+    let qr_sample = fixtures.join("qr/tw_einvoice_sample_01.payload.txt");
+
+    if text_paths.is_empty() {
+        return Err(format!("no text fixtures under {}", fixtures.display()));
+    }
+
+    let step = |n: u32, title: &str| {
+        if !quiet {
+            println!("── step {n}: {title} ──");
+        }
+    };
+
+    step(1, "parse + confirm text receipts");
+    let mut confirmed = 0usize;
+    for path in &text_paths {
+        let currency = currency_hint_for_path(path);
+        let draft = process_path(
+            path,
+            eng.as_ref(),
+            &categories,
+            ProcessOptions {
+                default_currency: currency,
+                ..Default::default()
+            },
+        )
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+        let hash = rradar_core::preprocess::content_hash(&std::fs::read(path).unwrap_or_default());
+        let res = ledger
+            .confirm_draft(&draft, Some(&hash), None, false)
+            .map_err(|e| e.to_string())?;
+        if res.inserted {
+            confirmed += 1;
+        }
+        if !quiet {
+            println!(
+                "  ✓ {:<28}  {:>3} {:>10.2}  {}",
+                path.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
+                draft.total.value.currency,
+                draft.total.value.amount_minor as f64
+                    / 10f64.powi(draft.total.value.exponent as i32),
+                draft.merchant.value
+            );
+        }
+    }
+
+    step(2, "mock image path (RRADAR_MOCK_OCR binaries)");
+    for path in &mock_paths {
+        let currency = currency_hint_for_path(path);
+        let draft = process_path(
+            path,
+            eng.as_ref(),
+            &categories,
+            ProcessOptions {
+                default_currency: currency,
+                ..Default::default()
+            },
+        )
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+        let hash = rradar_core::preprocess::content_hash(&std::fs::read(path).unwrap_or_default());
+        let res = ledger
+            .confirm_draft(&draft, Some(&hash), Some("demo mock_ocr"), false)
+            .map_err(|e| e.to_string())?;
+        if res.inserted {
+            confirmed += 1;
+        }
+        if !quiet {
+            println!(
+                "  ✓ {:<28}  {} (source mock image)",
+                path.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
+                draft.merchant.value
+            );
+        }
+    }
+
+    step(3, "TW e-invoice QR prefer path");
+    if qr_sample.is_file() {
+        let payload = std::fs::read_to_string(&qr_sample)
+            .map_err(|e| e.to_string())?
+            .trim()
+            .to_string();
+        // Any path works; QR payload drives structured fields.
+        let carrier = &text_paths[0];
+        let draft = process_path(
+            carrier,
+            eng.as_ref(),
+            &categories,
+            ProcessOptions {
+                qr_payload: Some(payload),
+                ..Default::default()
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        let res = ledger
+            .confirm_draft(&draft, None, Some("demo qr"), true)
+            .map_err(|e| e.to_string())?;
+        if res.inserted {
+            confirmed += 1;
+        }
+        if !quiet {
+            println!(
+                "  ✓ QR invoice={} total={} {}",
+                draft
+                    .invoice_id
+                    .as_ref()
+                    .map(|f| f.value.as_str())
+                    .unwrap_or("?"),
+                draft.total.value.amount_minor,
+                draft.total.value.currency
+            );
+        }
+    } else if !quiet {
+        println!("  (skip — qr sample missing)");
+    }
+
+    step(4, "browse ledger");
+    let n = ledger.count().map_err(|e| e.to_string())?;
+    let rows = ledger.list_transactions(8, 0).map_err(|e| e.to_string())?;
+    if !quiet {
+        println!("  count | {n}  (confirmed this run ≈ {confirmed})");
+        for t in &rows {
+            println!(
+                "  · {}  {}  {}  {}",
+                &t.id[..t.id.len().min(12)],
+                t.currency,
+                t.amount_minor,
+                t.merchant
+            );
+        }
+    }
+
+    step(5, "stats + top merchants");
+    let stats = ledger.stats_by_currency_all().map_err(|e| e.to_string())?;
+    if !quiet {
+        for s in &stats {
+            println!(
+                "  {} {:04}-{:02}  n={}  minor={}",
+                s.currency, s.year, s.month, s.count, s.total_minor
+            );
+        }
+        if let Ok(top) = ledger.top_merchants("TWD", 5) {
+            for (m, minor, c) in top {
+                println!("  top TWD | {m}  minor={minor}  n={c}");
+            }
+        }
+    }
+
+    step(6, "export CSV + JSON");
+    let out_dir = demo_db
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let all = ledger
+        .list_transactions(10_000, 0)
+        .map_err(|e| e.to_string())?;
+    let csv_path = out_dir.join("demo-export.csv");
+    let json_path = out_dir.join("demo-export.json");
+    let csv = transactions_to_csv(&all).map_err(|e| e.to_string())?;
+    let json = transactions_to_json(&all).map_err(|e| e.to_string())?;
+    std::fs::write(&csv_path, csv).map_err(|e| e.to_string())?;
+    std::fs::write(&json_path, json).map_err(|e| e.to_string())?;
+    if !quiet {
+        println!("  csv  | {}", csv_path.display());
+        println!("  json | {}", json_path.display());
+    }
+
+    if !skip_backup {
+        step(7, "encrypted backup.rradar");
+        // Demo passphrase is intentionally public; real users choose their own.
+        let bak = out_dir.join("demo-backup.rradar");
+        let bytes = create_backup(
+            &ledger,
+            "demo-passphrase",
+            8, /* fast Argon2 for demo */
+        )
+        .map_err(|e| e.to_string())?;
+        std::fs::write(&bak, bytes).map_err(|e| e.to_string())?;
+        if !quiet {
+            println!(
+                "  backup | {}  (passphrase: demo-passphrase)",
+                bak.display()
+            );
+        }
+    }
+
+    if !quiet {
+        println!();
+        println!("DEMO_OK — closed loop finished ({n} rows in demo ledger).");
+        println!("Next: rradar list --db {}", demo_db.display());
+        println!("      rradar process fixtures/text/familymart_89.txt --explain");
+        println!("Record tip: capture this command output as a terminal GIF for README.");
+    } else {
+        println!("DEMO_OK n={n}");
+    }
+    Ok(())
+}
+
+fn find_fixtures_dir() -> PathBuf {
+    let candidates = [
+        PathBuf::from("fixtures"),
+        PathBuf::from("./fixtures"),
+        // When cwd is crates/rradar-cli during some cargo invocations
+        PathBuf::from("../../fixtures"),
+        PathBuf::from("../fixtures"),
+    ];
+    for c in candidates {
+        if c.is_dir() {
+            return c;
+        }
+    }
+    PathBuf::from("fixtures")
+}
+
+fn collect_glob(dir: &Path, exts: &[&str]) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let rd = match std::fs::read_dir(dir) {
+        Ok(r) => r,
+        Err(_) => return out,
+    };
+    for ent in rd.flatten() {
+        let p = ent.path();
+        if !p.is_file() {
+            continue;
+        }
+        let ok = p
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| exts.iter().any(|x| e.eq_ignore_ascii_case(x)))
+            .unwrap_or(false);
+        if ok {
+            out.push(p);
+        }
+    }
+    out
+}
+
+fn currency_hint_for_path(path: &Path) -> Iso4217 {
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if name.contains("usd") || name.contains("starbucks") {
+        Iso4217::USD
+    } else {
+        Iso4217::TWD
+    }
 }
 
 fn cmd_process(args: &[String]) -> Result<(), String> {
@@ -1280,11 +1615,19 @@ backup restore --in file -p PASS [--db PATH]
 seal [--db ledger.db] -o file.rrsealed -p PASS
 unseal --in file.rrsealed -o ledger.db -p PASS
   Whole-file at-rest encryption (P2).",
+        "demo" => "\
+demo [--fixtures DIR] [--db PATH] [--no-backup] [--quiet]
+  Isolated closed-loop demo for recording / CI:
+  text + mock_ocr fixtures → confirm → list/stats/top → export → backup.
+  Default demo db: %APPDATA%/receiptradar/demo/ledger.db (fresh each run).
+  Does not touch the default user ledger unless --db or RRADAR_DB is set.
+  RRADAR_FIXTURES overrides fixtures root discovery.",
         "init" | "doctor" | "path" | "config" => "\
 init     create data dir + empty ledger + default config.toml
 config [show|set default_currency TWD|set list_limit 50]
-doctor   health check
+doctor   health check (schema version, engines, models)
 path     print home + db paths
+demo     one-command closed-loop from fixtures/ (recordable)
   RRADAR_HOME / RRADAR_DB / RRADAR_DEFAULT_CURRENCY override defaults.",
         "edit" | "delete" | "show" | "rm" => "\
 show <id>
@@ -1308,6 +1651,7 @@ rradar — ReceiptRadar CLI (local-first ledger)
 {PRODUCT_ID} {VERSION}
 
 Quick start:
+  rradar demo
   rradar init
   rradar process fixtures/text/familymart_89.txt --confirm --explain
   rradar list
@@ -1318,6 +1662,7 @@ Commands:
   init                 Create data dir + empty ledger + config
   config               Show/set local config.toml
   doctor               Environment / db check
+  demo                 One-command closed-loop demo (fixtures → ledger)
   path                 Print default home & db paths
   process <files…>     Parse receipt(s) (alias: add); batch OK
   manual               Manual entry without OCR (alias: entry)

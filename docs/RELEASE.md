@@ -32,6 +32,8 @@ rradar init
 rradar process fixtures/text/familymart_89.txt --confirm -q
 rradar list
 rradar stats --all
+# From a checkout with fixtures/:
+rradar demo --quiet
 ```
 
 ## Not in CLI release

@@ -43,5 +43,8 @@ jobs:
           cargo run -p rradar-cli -- process fixtures/text/familymart_89.txt
           cargo run -p bench-ocr -- fixtures/text
 
+      - name: demo closed-loop
+        run: cargo run -p rradar-cli -- demo --fixtures fixtures --db target/ci-demo/ledger.db --quiet
+
       - name: network audit
         run: python tools/network-audit/check_offline_deps.py

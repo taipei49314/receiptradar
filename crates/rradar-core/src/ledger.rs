@@ -155,6 +155,30 @@ impl Ledger {
         Ok(())
     }
 
+    /// Current ledger schema version from `meta` (default `"1"`).
+    pub fn schema_version(&self) -> Result<String, LedgerError> {
+        let v: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(v.unwrap_or_else(|| "1".into()))
+    }
+
+    /// Read arbitrary meta key (for doctor / migrations diagnostics).
+    pub fn meta_get(&self, key: &str) -> Result<Option<String>, LedgerError> {
+        let v = self
+            .conn
+            .query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        Ok(v)
+    }
+
     /// Confirm a draft into the ledger. `force` overrides hard dedupe.
     pub fn confirm_draft(
         &self,

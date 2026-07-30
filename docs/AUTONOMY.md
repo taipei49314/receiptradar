@@ -81,15 +81,34 @@
 - Desktop can run `process --engine onnx` when models + ORT present and binary built with `--features onnx`
 - CI remains mock-only (no weights in git)
 
+## Cycle 12 — product demo closed loop (main axis #5)
+
+### Plan
+1. `rradar demo` isolated closed-loop (text + mock_ocr + QR → confirm → stats → export → backup)
+2. Expand fixtures matrix (7-ELEVEN, 麥當勞, 萊爾富, 屈臣氏, 中油 + mock image bins)
+3. `scripts/demo.ps1` / `demo.sh`, Justfile `demo`, CI `demo closed-loop` step
+4. FFI: confirm / stats / schema / ensure_ledger for mobile prep
+5. Doctor shows ledger schema version
+
+### Verify
+- `cargo test --workspace` green (incl. `demo_closed_loop`, golden mock_ocr)
+- `cargo clippy --workspace --all-targets -- -D warnings` green
+- `rradar demo --quiet` → `DEMO_OK n=14`
+
+### Result
+- One-command recordable path from repo root; default user ledger untouched
+- Fixtures sized for GIF / launch T0 narrative
+
 ### Next seeds
 | Priority | Item |
 |----------|------|
-| P1 | Keep CI green; pin `manifest.sha256` after trusted download |
-| P2 | A04 device metrics in `spike-ocr-size.md` |
-| P3 | Mobile/FFI surface + demo fixtures matrix |
+| P1 | Keep CI green; pin ONNX `manifest.sha256` after trusted download |
+| P2 | Mobile/Flutter generate when SDK present; grow FFI |
+| P3 | A04 device metrics; release install polish |
 
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
 - Green tests before re-plan  
 - Non-goals: official sync, GPT wrapper  
+
 

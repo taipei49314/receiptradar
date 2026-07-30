@@ -20,6 +20,10 @@ cli *args:
 smoke:
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-cli.ps1
 
+# Recordable closed-loop demo (isolated target/demo ledger)
+demo:
+    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/demo.ps1
+
 install:
     cargo install --path crates/rradar-cli --force --locked
 

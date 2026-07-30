@@ -95,3 +95,32 @@ fn init_process_list_stats_export_edit_delete() {
     assert!(out.status.success());
     assert!(String::from_utf8_lossy(&out.stdout).contains("confirmed"));
 }
+
+#[test]
+fn demo_closed_loop() {
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    assert!(fixtures.is_dir(), "fixtures missing");
+    let home = std::env::temp_dir().join(format!("rradar-demo-test-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&home);
+    let db = home.join("ledger.db");
+    let out = bin()
+        .args([
+            "demo",
+            "--fixtures",
+            fixtures.to_str().unwrap(),
+            "--db",
+            db.to_str().unwrap(),
+            "--quiet",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "demo: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("DEMO_OK"), "{stdout}");
+    assert!(db.is_file(), "demo ledger not created");
+}

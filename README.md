@@ -12,11 +12,19 @@ Offline receipt → ledger. Local-first. No account.
 
 [中文](./README.zh-TW.md) · [CLI guide](./docs/cli.md) · [Design](./docs/design-full.md)
 
-## Install & quick start
+## Install & one-click demo
 
 ```bash
 cargo install --path crates/rradar-cli
-rradar init
+# From repo root — full closed loop (parse → ledger → stats → export → backup)
+rradar demo
+# Windows helper:
+#   powershell -File scripts/demo.ps1
+```
+
+Daily use after `rradar init`:
+
+```bash
 rradar process fixtures/text/familymart_89.txt --confirm --explain
 rradar list
 rradar stats
@@ -24,10 +32,11 @@ rradar export csv -o out.csv
 rradar backup create -p 'choose-a-passphrase'
 ```
 
-Default database: `%APPDATA%\receiptradar\ledger.db` (Windows) or `~/.local/share/receiptradar/ledger.db`.
+Default database: `%APPDATA%\receiptradar\ledger.db` (Windows) or `~/.local/share/receiptradar/ledger.db`.  
+Demo ledger (isolated): `…/receiptradar/demo/ledger.db` (recreated each `rradar demo`).
 
 ```bash
-rradar doctor   # paths, ledger health, engines
+rradar doctor   # paths, schema version, engines
 rradar help
 ```
 

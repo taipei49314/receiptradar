@@ -8,6 +8,8 @@ use std::path::PathBuf;
 #[derive(Debug, Deserialize)]
 struct Manifest {
     text_fixtures: Vec<TextFx>,
+    #[serde(default)]
+    mock_ocr_fixtures: Vec<TextFx>,
     qr_fixtures: Vec<QrFx>,
 }
 
@@ -62,6 +64,43 @@ fn golden_text_fixtures() {
             fx.path
         );
         assert_eq!(draft.source_path, SourcePath::Ocr);
+    }
+}
+
+#[test]
+fn golden_mock_ocr_binaries() {
+    let root = fixtures_root();
+    let manifest: Manifest = serde_json::from_str(
+        &std::fs::read_to_string(root.join("manifest.json")).expect("manifest"),
+    )
+    .expect("parse manifest");
+    let eng = MockOcrEngine;
+    let cats = CategoryEngine::with_seed();
+
+    for fx in manifest.mock_ocr_fixtures {
+        let path = root.join(&fx.path);
+        let currency = Iso4217::parse(&fx.expect_currency).expect("currency");
+        let draft = process_path(
+            &path,
+            &eng,
+            &cats,
+            ProcessOptions {
+                default_currency: currency,
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("{}: {e}", fx.path));
+        assert_eq!(
+            draft.total.value.amount_minor, fx.expect_total_minor,
+            "{} total",
+            fx.path
+        );
+        assert_eq!(
+            draft.total.value.currency.to_string(),
+            fx.expect_currency,
+            "{} currency",
+            fx.path
+        );
     }
 }
 

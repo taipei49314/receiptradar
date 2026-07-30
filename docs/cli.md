@@ -27,6 +27,17 @@ rradar path
 rradar doctor
 ```
 
+## One-click demo (recordable)
+
+```bash
+# From repo root — isolated demo ledger, full closed loop
+rradar demo
+rradar demo --quiet          # CI-friendly
+powershell -File scripts/demo.ps1
+```
+
+Covers: text fixtures + mock image bins + TW QR → confirm → list/stats/top → CSV/JSON export → encrypted backup.
+
 ## Daily workflow
 
 ```bash
