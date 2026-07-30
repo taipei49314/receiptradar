@@ -28,17 +28,22 @@
 ## Cycle 4 — docs/changelog closeout
 - CHANGELOG + this log; commit cycle 3–4  
 
-## Cycle 5–6 — unattended push
+## Cycle 5–6 — unattended push ✅
 
-### Plan
-1. `top` merchants, `stats --from/--to`, `clear --yes`
+### Plan / Execute
+1. `top`, `stats --from/--to`, `clear --yes`
 2. SECURITY.md, AGENTS.md
-3. Create GitHub remote + push master
+3. **GitHub:** https://github.com/taipei49314/receiptradar  
+4. Pushed `master` + tag **`v0.1.0-cli.1`**
+
+## Cycle 7 — post-publish
+
+- More merchant seeds, fixture pxmart, CI badge, correct repo URL
 
 ### Next seeds
 | Priority | Item | Blocker |
 |----------|------|---------|
-| P1 | Tag release after push | human optional |
+| P2 | Watch GH Actions release | CI |
 | P2 | Real ONNX + models | weights |
 | P2 | Flutter FRB | SDK |
 
