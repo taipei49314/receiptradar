@@ -37,6 +37,7 @@ fn main() -> ExitCode {
         "manual" | "entry" => cmd_manual(&args[1..]),
         "import" => cmd_import(&args[1..]),
         "list" | "ls" | "search" => cmd_list(&args[1..]),
+        "count" => cmd_count(&args[1..]),
         "show" => cmd_show(&args[1..]),
         "delete" | "rm" => cmd_delete(&args[1..]),
         "edit" => cmd_edit(&args[1..]),
@@ -560,6 +561,17 @@ fn extract_db_from_all(args: &[String]) -> Result<DbFlags, String> {
         db: db.unwrap_or_else(default_db_path),
         passphrase,
     })
+}
+
+fn cmd_count(args: &[String]) -> Result<(), String> {
+    let flags = extract_db_from_all(args)?;
+    let (ledger, tmp) = open_db(&flags)?;
+    let n = ledger.count().map_err(|e| e.to_string())?;
+    println!("count | {n}");
+    if let Some(t) = tmp {
+        let _ = std::fs::remove_file(t);
+    }
+    Ok(())
 }
 
 fn cmd_show(args: &[String]) -> Result<(), String> {
@@ -1189,6 +1201,7 @@ Commands:
   manual               Manual entry without OCR (alias: entry)
   import json <file>   Import transactions JSON array
   list                 List transactions (alias: ls, search)
+  count                Transaction count
   show <id>            Show one transaction (JSON)
   edit <id>            Edit merchant/amount/category/notes/date
   delete <id> --yes    Delete transaction (alias: rm)
