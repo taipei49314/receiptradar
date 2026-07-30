@@ -40,6 +40,8 @@ fn main() -> ExitCode {
         "delete" | "rm" => cmd_delete(&args[1..]),
         "edit" => cmd_edit(&args[1..]),
         "stats" => cmd_stats(&args[1..]),
+        "top" => cmd_top(&args[1..]),
+        "clear" => cmd_clear(&args[1..]),
         "categories" | "cats" => cmd_categories(),
         "export" => cmd_export(&args[1..]),
         "backup" => cmd_backup(&args[1..]),
@@ -628,6 +630,8 @@ fn cmd_stats(args: &[String]) -> Result<(), String> {
     let mut year: Option<i32> = None;
     let mut month: Option<u32> = None;
     let mut all = false;
+    let mut from: Option<String> = None;
+    let mut to: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -650,6 +654,14 @@ fn cmd_stats(args: &[String]) -> Result<(), String> {
                         .map_err(|_| "bad month")?,
                 );
             }
+            "--from" => {
+                i += 1;
+                from = Some(args.get(i).ok_or("needs value")?.clone());
+            }
+            "--to" => {
+                i += 1;
+                to = Some(args.get(i).ok_or("needs value")?.clone());
+            }
             _ => {}
         }
         i += 1;
@@ -657,13 +669,19 @@ fn cmd_stats(args: &[String]) -> Result<(), String> {
     let flags = extract_db_from_all(args)?;
     let (ledger, tmp) = open_db(&flags)?;
     let stats = if all {
+        println!("period | all-time");
         ledger.stats_by_currency_all().map_err(|e| e.to_string())?
+    } else if let (Some(f), Some(t)) = (from.as_deref(), to.as_deref()) {
+        println!("period | {f} .. {t}");
+        ledger
+            .stats_by_currency_range(f, t)
+            .map_err(|e| e.to_string())?
     } else {
         let (y, m) = match (year, month) {
             (Some(y), Some(m)) => (y, m),
             _ => current_year_month(),
         };
-        println!("period\t{y:04}-{m:02}");
+        println!("period | {y:04}-{m:02}");
         ledger
             .stats_by_currency_month(y, m)
             .map_err(|e| e.to_string())?
@@ -678,15 +696,70 @@ fn cmd_stats(args: &[String]) -> Result<(), String> {
             )
             .display_major();
             println!(
-                "{}\t{}\tcount={}\tminor={}",
+                "{} | {} | count={} | minor={}",
                 s.currency, major, s.count, s.total_minor
             );
         }
-        println!("note\tcurrencies are never summed together");
+        println!("note | currencies are never summed together");
     }
     if let Some(t) = tmp {
         let _ = std::fs::remove_file(t);
     }
+    Ok(())
+}
+
+fn cmd_top(args: &[String]) -> Result<(), String> {
+    let mut currency = default_currency_from_env().to_string();
+    let mut limit = 10usize;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--currency" => {
+                i += 1;
+                currency = args.get(i).ok_or("needs value")?.clone();
+            }
+            "--limit" => {
+                i += 1;
+                limit = args
+                    .get(i)
+                    .ok_or("needs value")?
+                    .parse()
+                    .map_err(|_| "bad limit")?;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let flags = extract_db_from_all(args)?;
+    let (ledger, tmp) = open_db(&flags)?;
+    let rows = ledger
+        .top_merchants(&currency, limit)
+        .map_err(|e| e.to_string())?;
+    if rows.is_empty() {
+        println!("(no rows for {currency})");
+    } else {
+        println!("rank | merchant | total | count | currency={currency}");
+        for (i, (m, minor, cnt)) in rows.iter().enumerate() {
+            let major =
+                Money::new(*minor, Iso4217::parse(&currency).unwrap_or(Iso4217::TWD)).display_major();
+            println!("{:>4} | {m} | {major} | {cnt}", i + 1);
+        }
+    }
+    if let Some(t) = tmp {
+        let _ = std::fs::remove_file(t);
+    }
+    Ok(())
+}
+
+fn cmd_clear(args: &[String]) -> Result<(), String> {
+    if !args.iter().any(|a| a == "--yes") {
+        return Err("refusing to clear ledger without --yes".into());
+    }
+    let flags = extract_db_from_all(args)?;
+    let (ledger, tmp) = open_db(&flags)?;
+    let n = ledger.clear_all().map_err(|e| e.to_string())?;
+    println!("cleared | {n} transactions");
+    maybe_reseal(&flags, &ledger, tmp)?;
     Ok(())
 }
 
@@ -999,8 +1072,14 @@ manual --merchant NAME --amount MAJOR [--currency TWD] [--category ID] [--date Y
 list [--json] [--limit N] [--offset N] [--currency C] [--query Q] [--db PATH]
   Aliases: ls, search. Table output uses | separators.",
         "stats" => "\
-stats [--year Y --month M | --all] [--db PATH]
+stats [--year Y --month M | --from DATE --to DATE | --all] [--db PATH]
   Per-currency totals only (never mixes currencies). Default: current UTC month.",
+        "top" => "\
+top [--currency TWD] [--limit 10] [--db PATH]
+  Top merchants by spend within one currency.",
+        "clear" => "\
+clear --yes [--db PATH]
+  Delete ALL transactions (irreversible without backup).",
         "export" => "\
 export csv|json [-o file] [--db PATH]
   CSV includes UTF-8 BOM for Excel.",
@@ -1060,6 +1139,8 @@ Commands:
   edit <id>            Edit merchant/amount/category/notes/date
   delete <id> --yes    Delete transaction (alias: rm)
   stats                Per-currency totals (default: this month)
+  top                  Top merchants by spend (one currency)
+  clear --yes          Wipe all transactions
   categories           List category ids
   export csv|json      Export ledger
   backup create|restore

@@ -514,6 +514,64 @@ impl Ledger {
         }
     }
 
+    /// Per-currency totals for a date prefix range [from, to] inclusive on YYYY-MM-DD strings.
+    pub fn stats_by_currency_range(
+        &self,
+        from: &str,
+        to: &str,
+    ) -> Result<Vec<CurrencyMonthStat>, LedgerError> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT currency, SUM(amount_minor), COUNT(*)
+               FROM transactions
+               WHERE substr(transacted_at,1,10) >= ?1 AND substr(transacted_at,1,10) <= ?2
+               GROUP BY currency
+               ORDER BY currency"#,
+        )?;
+        let rows = stmt.query_map(params![from, to], |r| {
+            Ok(CurrencyMonthStat {
+                currency: r.get(0)?,
+                year: 0,
+                month: 0,
+                total_minor: r.get(1)?,
+                count: r.get(2)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// Top merchants by spend within one currency (required — no cross-currency).
+    pub fn top_merchants(
+        &self,
+        currency: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, i64, i64)>, LedgerError> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT merchant, SUM(amount_minor), COUNT(*)
+               FROM transactions
+               WHERE currency = ?1
+               GROUP BY merchant
+               ORDER BY SUM(amount_minor) DESC
+               LIMIT ?2"#,
+        )?;
+        let rows = stmt.query_map(params![currency, limit as i64], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    pub fn clear_all(&self) -> Result<usize, LedgerError> {
+        let n = self.conn.execute("DELETE FROM transactions", [])?;
+        Ok(n)
+    }
+
     /// All-time per-currency totals (no cross-currency sum).
     pub fn stats_by_currency_all(&self) -> Result<Vec<CurrencyMonthStat>, LedgerError> {
         let mut stmt = self.conn.prepare(
@@ -736,5 +794,24 @@ mod tests {
         let found = db.list_filtered(10, 0, None, Some("肯德")).unwrap();
         assert_eq!(found.len(), 1);
         assert!(found[0].merchant.contains("肯德"));
+    }
+
+    #[test]
+    fn top_and_range_and_clear() {
+        let db = Ledger::open_in_memory().unwrap();
+        let mut a = sample_draft("a", None, 1000);
+        a.merchant = Field::new("店A".into(), 1.0, FieldSource::User);
+        let mut b = sample_draft("b", None, 5000);
+        b.merchant = Field::new("店B".into(), 1.0, FieldSource::User);
+        b.transacted_at.value = "2024-06-01".into();
+        db.confirm_draft(&a, None, None, false).unwrap();
+        db.confirm_draft(&b, None, None, false).unwrap();
+        let top = db.top_merchants("TWD", 5).unwrap();
+        assert_eq!(top[0].0, "店B");
+        assert_eq!(top[0].1, 5000);
+        let range = db.stats_by_currency_range("2024-05-01", "2024-05-31").unwrap();
+        assert_eq!(range[0].total_minor, 1000);
+        assert_eq!(db.clear_all().unwrap(), 2);
+        assert_eq!(db.count().unwrap(), 0);
     }
 }

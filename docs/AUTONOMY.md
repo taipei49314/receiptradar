@@ -28,13 +28,19 @@
 ## Cycle 4 — docs/changelog closeout
 - CHANGELOG + this log; commit cycle 3–4  
 
-### Next plan seeds (Cycle 5+)
+## Cycle 5–6 — unattended push
+
+### Plan
+1. `top` merchants, `stats --from/--to`, `clear --yes`
+2. SECURITY.md, AGENTS.md
+3. Create GitHub remote + push master
+
+### Next seeds
 | Priority | Item | Blocker |
 |----------|------|---------|
-| P1 | Tag `v0.1.0-cli.1` when ready to publish binaries | User/git remote |
-| P2 | Real ONNX + models | Device spike + weights |
-| P2 | Flutter FRB | Flutter SDK |
-| P3 | More locale adapters | Time |
+| P1 | Tag release after push | human optional |
+| P2 | Real ONNX + models | weights |
+| P2 | Flutter FRB | SDK |
 
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
