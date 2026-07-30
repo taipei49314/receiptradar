@@ -97,6 +97,18 @@ pub struct ConfirmResult {
     pub inserted: bool,
 }
 
+/// Fields to patch on an existing transaction (`None` = leave unchanged).
+#[derive(Debug, Clone, Default)]
+pub struct TxUpdate {
+    pub merchant: Option<String>,
+    pub amount_minor: Option<i64>,
+    pub currency: Option<String>,
+    pub exponent: Option<u8>,
+    pub category: Option<String>,
+    pub notes: Option<String>,
+    pub transacted_at: Option<String>,
+}
+
 pub struct Ledger {
     conn: Connection,
     path: PathBuf,
@@ -347,6 +359,140 @@ impl Ledger {
         self.list_transactions(100_000, 0)
     }
 
+    pub fn delete_transaction(&self, id: &str) -> Result<bool, LedgerError> {
+        let n = self
+            .conn
+            .execute("DELETE FROM transactions WHERE id = ?1", params![id])?;
+        Ok(n > 0)
+    }
+
+    /// Partial update; only `Some` fields on [`TxUpdate`] are written.
+    pub fn update_transaction(&self, id: &str, u: &TxUpdate) -> Result<Transaction, LedgerError> {
+        let mut tx = self.get_transaction(id)?;
+        if let Some(ref m) = u.merchant {
+            tx.merchant = m.clone();
+        }
+        if let Some(a) = u.amount_minor {
+            tx.amount_minor = a;
+        }
+        if let Some(ref c) = u.currency {
+            tx.currency = c.clone();
+            if let Some(iso) = Iso4217::parse(c) {
+                tx.exponent = u.exponent.unwrap_or(iso.exponent());
+            }
+        } else if let Some(e) = u.exponent {
+            tx.exponent = e;
+        }
+        if let Some(ref cat) = u.category {
+            tx.category = cat.clone();
+        }
+        if let Some(ref n) = u.notes {
+            tx.notes = Some(n.clone());
+        }
+        if let Some(ref d) = u.transacted_at {
+            tx.transacted_at = d.clone();
+        }
+        let n = self.conn.execute(
+            r#"UPDATE transactions SET
+                merchant = ?2,
+                amount_minor = ?3,
+                currency = ?4,
+                exponent = ?5,
+                category = ?6,
+                notes = ?7,
+                transacted_at = ?8
+               WHERE id = ?1"#,
+            params![
+                id,
+                tx.merchant,
+                tx.amount_minor,
+                tx.currency,
+                tx.exponent as i64,
+                tx.category,
+                tx.notes,
+                tx.transacted_at,
+            ],
+        )?;
+        if n == 0 {
+            return Err(LedgerError::NotFound(id.into()));
+        }
+        self.get_transaction(id)
+    }
+
+    /// Filter list by optional substring merchant/category and currency.
+    pub fn list_filtered(
+        &self,
+        limit: usize,
+        offset: usize,
+        currency: Option<&str>,
+        query: Option<&str>,
+    ) -> Result<Vec<Transaction>, LedgerError> {
+        let lim = limit as i64;
+        let off = offset as i64;
+        match (currency, query) {
+            (None, None) => self.list_transactions(limit, offset),
+            (Some(c), None) => {
+                let mut stmt = self.conn.prepare(
+                    r#"SELECT id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
+                              category, invoice_id, source_path, overall_confidence, content_hash, notes
+                       FROM transactions WHERE currency = ?1
+                       ORDER BY transacted_at DESC, confirmed_at DESC LIMIT ?2 OFFSET ?3"#,
+                )?;
+                let rows = stmt.query_map(params![c, lim, off], row_to_tx)?;
+                rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+            }
+            (None, Some(q)) => {
+                let pat = format!("%{q}%");
+                let mut stmt = self.conn.prepare(
+                    r#"SELECT id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
+                              category, invoice_id, source_path, overall_confidence, content_hash, notes
+                       FROM transactions
+                       WHERE merchant LIKE ?1 OR category LIKE ?1 OR IFNULL(notes,'') LIKE ?1
+                       ORDER BY transacted_at DESC, confirmed_at DESC LIMIT ?2 OFFSET ?3"#,
+                )?;
+                let rows = stmt.query_map(params![pat, lim, off], row_to_tx)?;
+                rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+            }
+            (Some(c), Some(q)) => {
+                let pat = format!("%{q}%");
+                let mut stmt = self.conn.prepare(
+                    r#"SELECT id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
+                              category, invoice_id, source_path, overall_confidence, content_hash, notes
+                       FROM transactions
+                       WHERE currency = ?1
+                         AND (merchant LIKE ?2 OR category LIKE ?2 OR IFNULL(notes,'') LIKE ?2)
+                       ORDER BY transacted_at DESC, confirmed_at DESC LIMIT ?3 OFFSET ?4"#,
+                )?;
+                let rows = stmt.query_map(params![c, pat, lim, off], row_to_tx)?;
+                rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+            }
+        }
+    }
+
+    /// All-time per-currency totals (no cross-currency sum).
+    pub fn stats_by_currency_all(&self) -> Result<Vec<CurrencyMonthStat>, LedgerError> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT currency, SUM(amount_minor), COUNT(*)
+               FROM transactions
+               GROUP BY currency
+               ORDER BY currency"#,
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(CurrencyMonthStat {
+                currency: r.get(0)?,
+                year: 0,
+                month: 0,
+                total_minor: r.get(1)?,
+                count: r.get(2)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
     /// Serialize DB file bytes (for backup). In-memory DBs are dumped via VACUUM INTO temp.
     pub fn export_sqlite_bytes(&self) -> Result<Vec<u8>, LedgerError> {
         if self.path == Path::new(":memory:") || self.path.as_os_str().is_empty() {
@@ -506,5 +652,44 @@ mod tests {
         db.confirm_draft(&d2, None, None, false).unwrap();
         let stats = db.stats_by_currency_month(2024, 5).unwrap();
         assert_eq!(stats.len(), 2);
+    }
+
+    #[test]
+    fn delete_and_update() {
+        let db = Ledger::open_in_memory().unwrap();
+        let d = sample_draft("txdel", None, 500);
+        db.confirm_draft(&d, None, None, false).unwrap();
+        let u = db
+            .update_transaction(
+                "txdel",
+                &TxUpdate {
+                    merchant: Some("新店名".into()),
+                    amount_minor: Some(600),
+                    currency: Some("TWD".into()),
+                    category: Some("other".into()),
+                    notes: Some("note".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(u.merchant, "新店名");
+        assert_eq!(u.amount_minor, 600);
+        assert_eq!(u.notes.as_deref(), Some("note"));
+        assert!(db.delete_transaction("txdel").unwrap());
+        assert_eq!(db.count().unwrap(), 0);
+    }
+
+    #[test]
+    fn list_filtered_query() {
+        let db = Ledger::open_in_memory().unwrap();
+        db.confirm_draft(&sample_draft("1", None, 100), None, None, false)
+            .unwrap();
+        let mut d2 = sample_draft("2", None, 200);
+        d2.merchant = Field::new("肯德基".into(), 1.0, FieldSource::User);
+        d2.category = Field::new("food_dining".into(), 1.0, FieldSource::User);
+        db.confirm_draft(&d2, None, None, false).unwrap();
+        let found = db.list_filtered(10, 0, None, Some("肯德")).unwrap();
+        assert_eq!(found.len(), 1);
+        assert!(found[0].merchant.contains("肯德"));
     }
 }

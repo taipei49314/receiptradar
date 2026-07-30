@@ -1,112 +1,70 @@
 # ReceiptRadar（發票雷達）
 
 **Snap. Parse. Own your spending.**  
-*Offline receipt → ledger in seconds. Local-first. No account.*
+Offline receipt → ledger. Local-first. No account.
 
-> **Status:** early Track A scaffold (`v0.1.0-alpha`). Real ONNX OCR, Flutter camera loop, and encrypted backup are planned — not all shipped yet.
+> **CLI product is complete** for daily local bookkeeping (mock OCR + text/QR fixtures).  
+> Real ONNX + mobile camera are optional next layers.
 
-[中文說明](./README.zh-TW.md)
+[中文](./README.zh-TW.md) · [CLI guide](./docs/cli.md) · [Design](./docs/design-full.md)
 
-## Why
+## Install & quick start
 
-Most people do not fail at bookkeeping because they cannot categorize expenses — they fail because **typing every receipt is friction**. Cloud finance apps fix friction by uploading your receipt photos to someone else's servers.
+```bash
+cargo install --path crates/rradar-cli
+rradar init
+rradar process fixtures/text/familymart_89.txt --confirm --explain
+rradar list
+rradar stats
+rradar export csv -o out.csv
+rradar backup create -p 'choose-a-passphrase'
+```
 
-ReceiptRadar keeps the capture → parse → ledger path **on your device**:
+Default database: `%APPDATA%\receiptradar\ledger.db` (Windows) or `~/.local/share/receiptradar/ledger.db`.
 
-- **No account**
-- **No cloud required** for the core path
-- **On-device** OCR (and Taiwan e-invoice **QR-first** when present)
-- Optional network features are **opt-in** and build-flavor gated
+```bash
+rradar doctor   # paths, ledger health, engines
+rradar help
+```
 
-## Thin vertical slice (v0.1)
+## What the CLI does
 
-| In v0.1 (Track A) | Explicitly later (Track B) |
-|-------------------|----------------------------|
-| CLI with real ONNX OCR on desktop | Full WASM browser OCR |
-| Pixel → field golden fixtures | Desktop Tauri companion |
-| Android debug APK: camera → review → ledger | Self-host E2E sync |
-| Encrypted backup `backup.rradar` v1 | Budgets, batch queue, iOS |
-| At-rest DB + image encryption | Official sync relay (**never** — project policy) |
+| Feature | Command |
+|---------|---------|
+| Parse receipt | `process` / `add` |
+| Confirm to ledger | `process … --confirm` |
+| Override fields | `--merchant --amount --category --date --notes` |
+| Browse | `list`, `show` |
+| Fix / remove | `edit`, `delete --yes` |
+| Monthly totals (per currency) | `stats` |
+| Export | `export csv\|json` |
+| Encrypted backup | `backup create\|restore` |
+| At-rest seal | `seal` / `unseal` |
+| TW e-invoice QR | `--qr` / `--qr-file` |
 
-**Public launch gate (Tier T0):** demo GIF + `rradar process` on fixtures. Store listing is not required.
+**Never** sums different currencies together.
 
-## Quick start (scaffold)
+## Privacy
 
-Requirements: Rust **1.78+** (`rustup`).
+- Core path: **no network**
+- Images / ledger stay on device unless you export
+- Optional `.rrsealed` whole-file encryption + `backup.rradar` (Argon2id + XChaCha20-Poly1305)
+
+## OCR engines
+
+| Engine | Use |
+|--------|-----|
+| `mock` (default) | Fixtures, CI, development |
+| `onnx` | After model pin (A04/A05); not required for CLI product |
+
+## Develop
 
 ```bash
 cargo test --workspace
-cargo run -p rradar-cli -- process fixtures/text/familymart_89.txt --explain
-cargo run -p rradar-cli -- process fixtures/text/familymart_89.txt --confirm --db ./ledger.db
-cargo run -p rradar-cli -- list --db ./ledger.db
-cargo run -p rradar-cli -- stats --db ./ledger.db --year 2024 --month 5
-cargo run -p rradar-cli -- export csv --db ./ledger.db -o out.csv
-cargo run -p rradar-cli -- backup create --db ./ledger.db --passphrase '…' -o backup.rradar
-cargo run -p rradar-cli -- seal --db ./ledger.db --out ledger.rrsealed --passphrase '…'
+cargo run -p rradar-cli -- doctor
+cargo run -p bench-ocr -- fixtures/text
 ```
-
-Default OCR engine is **mock** (CI-friendly). Real ONNX is stubbed until the device spike (PR-A04/A05).  
-At-rest default on desktop: **P2 sealed DB** (`.rrsealed`). Progress: [docs/progress-A02-A12.md](./docs/progress-A02-A12.md).
-
-## Architecture (target)
-
-```text
-┌─────────────────────────────────────────────┐
-│  Flutter (Android)  ·  rradar CLI           │
-│         │ flutter_rust_bridge / CLI         │
-│         ▼                                   │
-│  rradar-core  (Rust)                        │
-│    preprocess → QR prefer → OCR → L1 rules  │
-│    → category → SQLite ledger → backup      │
-│         ▲                                   │
-│  rradar-ocr (OcrEngine: mock → ONNX)        │
-└─────────────────────────────────────────────┘
-         data stays on device by default
-```
-
-## Privacy (defaults)
-
-| Mode | Network | Purpose |
-|------|---------|---------|
-| **A — offline flavor** | No `INTERNET` permission | Airplane-mode capable build |
-| **B — full + user download** | User-initiated model download only | Hash-pinned models |
-| **C — opt-in features** | Explicit toggles only | Never silent phone-home |
-
-Core claim: receipt images and ledger data **do not leave the device** unless you export a backup or enable an opt-in feature.
-
-See [docs/privacy.md](./docs/privacy.md).
-
-## Repo layout
-
-```text
-receiptradar/
-├── crates/
-│   ├── rradar-core/     # types, pipeline, ledger (grows in Track A)
-│   ├── rradar-ocr/      # OcrEngine trait + mock (+ ONNX later)
-│   └── rradar-cli/      # `rradar` binary
-├── apps/                # Flutter mobile (PR-A18+)
-├── docs/
-├── fixtures/            # golden matrix (PR-A11)
-└── .github/workflows/
-```
-
-## Roadmap pointer
-
-Implementation follows the design document:
-
-- Local copy: [`../ReceiptRadar-design-doc.md`](../ReceiptRadar-design-doc.md) (or your path)
-- Track A: PR-A01 (this scaffold) → … → PR-A25 `v0.1.0`
-- Binding risk gate: **PR-A04 OCR + size spike** (Green/Yellow/Orange/Red)
-
-## Contributing
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md). Good first issues will include merchant YAML seeds and fixture classes — after taxonomy lands.
 
 ## License
 
-- **Source code:** [Apache-2.0](./LICENSE)
-- **OCR model weights / third-party:** declared separately in `THIRD_PARTY_NOTICES` (when models ship) and release assets — not silently bundled without hashes
-
-## Trademark
-
-"ReceiptRadar" / "發票雷達" naming is subject to a pre-launch trademark check (open design question OQ-1).
+Apache-2.0 (source). Model weights declared separately when shipped.

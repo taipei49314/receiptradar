@@ -78,6 +78,8 @@ pub fn unpack_archive(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, ExportErro
 
 pub fn transactions_to_csv(rows: &[Transaction]) -> Result<String, ExportError> {
     let mut w = Vec::new();
+    // UTF-8 BOM helps Excel on Windows open CJK correctly
+    w.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
     writeln!(
         w,
         "id,confirmed_at,transacted_at,merchant,amount_minor,currency,exponent,category,invoice_id,source_path,confidence,notes"

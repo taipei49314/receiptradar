@@ -9,6 +9,7 @@ pub mod export;
 pub mod extract;
 pub mod ledger;
 pub mod money;
+pub mod paths;
 pub mod pipeline;
 pub mod preprocess;
 pub mod qr;
@@ -23,9 +24,10 @@ pub use export::{
 };
 pub use ledger::{
     apply_edits, ConfirmResult, CurrencyMonthStat, DedupeLevel, DedupeWarning, Ledger, LedgerError,
-    Transaction, UserEdits,
+    Transaction, TxUpdate, UserEdits,
 };
 pub use money::{sum_same_currency, Iso4217, Money, MoneyError};
+pub use paths::{data_dir, default_db_path, ensure_data_dir};
 pub use pipeline::{process_bytes, process_path, utc_now_iso, ProcessError, ProcessOptions};
 pub use sealed::{open_ledger_auto, save_sealed, seal_db_file};
 pub use types::{Field, FieldSource, ReceiptDraft, SourcePath, TextBlock};
