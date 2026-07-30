@@ -245,21 +245,22 @@ pub fn process_bytes(
     })
 }
 
-fn now_iso() -> String {
-    // Avoid chrono dependency: use a placeholder timestamp from ulid time if needed.
-    // For scaffold correctness, use UNIX-ish fixed format via system time.
+pub fn utc_now_iso() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    // rough UTC date from days since epoch
     let days = secs / 86400;
     let (y, m, d) = civil_from_days(days as i64);
     let hh = (secs / 3600) % 24;
     let mm = (secs / 60) % 60;
     let ss = secs % 60;
     format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}Z")
+}
+
+fn now_iso() -> String {
+    utc_now_iso()
 }
 
 /// Howard Hinnant civil_from_days (UTC).

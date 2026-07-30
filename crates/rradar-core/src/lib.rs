@@ -1,20 +1,33 @@
-//! ReceiptRadar core library — local-first receipt → draft pipeline.
+//! ReceiptRadar core library — local-first receipt → ledger.
 
 #![deny(unsafe_code)]
 
 pub mod category;
+pub mod crypto;
 pub mod explain;
+pub mod export;
 pub mod extract;
+pub mod ledger;
 pub mod money;
 pub mod pipeline;
 pub mod preprocess;
 pub mod qr;
+pub mod sealed;
 pub mod types;
 
 pub use category::CategoryEngine;
 pub use explain::ExplainTrace;
+pub use export::{
+    create_backup, create_backup_default_params, restore_backup, transactions_to_csv,
+    transactions_to_json, write_restored_db, ExportError,
+};
+pub use ledger::{
+    apply_edits, ConfirmResult, CurrencyMonthStat, DedupeLevel, DedupeWarning, Ledger, LedgerError,
+    Transaction, UserEdits,
+};
 pub use money::{sum_same_currency, Iso4217, Money, MoneyError};
-pub use pipeline::{process_bytes, process_path, ProcessError, ProcessOptions};
+pub use pipeline::{process_bytes, process_path, utc_now_iso, ProcessError, ProcessOptions};
+pub use sealed::{open_ledger_auto, save_sealed, seal_db_file};
 pub use types::{Field, FieldSource, ReceiptDraft, SourcePath, TextBlock};
 
 /// Crate version (workspace package version).

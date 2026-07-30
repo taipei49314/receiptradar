@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "ReceiptRadar core: types, extract, QR, category, process pipeline"
+description = "ReceiptRadar core: process pipeline, ledger, backup, crypto"
 repository.workspace = true
 
 [dependencies]
@@ -17,5 +17,11 @@ ulid = { workspace = true }
 regex = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+rusqlite = { workspace = true }
+chacha20poly1305 = { workspace = true }
+argon2 = { workspace = true }
+hkdf = { workspace = true }
+rand = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]

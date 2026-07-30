@@ -36,12 +36,17 @@ Requirements: Rust **1.78+** (`rustup`).
 
 ```bash
 cargo test --workspace
-cargo run -p rradar-cli -- version
 cargo run -p rradar-cli -- process fixtures/text/familymart_89.txt --explain
-cargo run -p rradar-cli -- process fixtures/text/starbucks_usd.txt --currency USD --json
+cargo run -p rradar-cli -- process fixtures/text/familymart_89.txt --confirm --db ./ledger.db
+cargo run -p rradar-cli -- list --db ./ledger.db
+cargo run -p rradar-cli -- stats --db ./ledger.db --year 2024 --month 5
+cargo run -p rradar-cli -- export csv --db ./ledger.db -o out.csv
+cargo run -p rradar-cli -- backup create --db ./ledger.db --passphrase '…' -o backup.rradar
+cargo run -p rradar-cli -- seal --db ./ledger.db --out ledger.rrsealed --passphrase '…'
 ```
 
-Default OCR engine is **mock** (CI-friendly). Real ONNX is stubbed until the device spike (PR-A04/A05). Progress: [docs/progress-A02-A12.md](./docs/progress-A02-A12.md).
+Default OCR engine is **mock** (CI-friendly). Real ONNX is stubbed until the device spike (PR-A04/A05).  
+At-rest default on desktop: **P2 sealed DB** (`.rrsealed`). Progress: [docs/progress-A02-A12.md](./docs/progress-A02-A12.md).
 
 ## Architecture (target)
 

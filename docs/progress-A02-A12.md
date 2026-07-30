@@ -37,14 +37,25 @@ Toolchain note: this machine used **stable-gnu + WinLibs MinGW** because MSVC `l
 - Real ONNX models + device spike report (A04/A05)
 - Sync / WASM / desktop / official relay (never)
 
-## Left for A13+
+## A13–A17 (done 2026-07-30)
 
-1. **A13–A14** SQLite ledger + soft/hard dedupe  
-2. **A15–A16** `backup.rradar` v1 + at-rest encryption  
-3. **A04** OCR size/latency spike on 2 Android devices → pin models  
-4. **A05** ONNX RapidOCR feature + hash-pinned fetch  
-5. **A18–A22** Flutter camera loop + offline flavor  
-6. **A23–A25** egress CI + README demo GIF + v0.1.0 release  
+| PR | Item | Notes |
+|----|------|-------|
+| A13 | SQLite ledger | `confirm_draft`, `list`, `stats_by_currency_month` |
+| A14 | Dedupe | hard = invoice+amount+day; soft = content hash |
+| A15 | Export + backup | CSV/JSON; `backup.rradar` v1 AEAD archive |
+| A16 | At-rest P2 | `.rrsealed` whole-file Argon2id+XChaCha20-Poly1305 |
+| A17 | License checklist | `docs/licenses-checklist.md` (manual before release) |
+
+CLI: `list`, `stats`, `export`, `backup create|restore`, `seal`, `process --confirm --db`.
+
+## Left for A18+ / risk path
+
+1. **A04** OCR size/latency spike on 2 Android devices → pin models  
+2. **A05** ONNX RapidOCR feature + hash-pinned fetch  
+3. **A18–A22** Flutter camera loop + offline flavor  
+4. **A23–A25** egress CI + README demo GIF + v0.1.0 release  
+5. SQLCipher P1 when Android NDK available (P2 sealed is default now)
 
 ## Known limitations (A12)
 

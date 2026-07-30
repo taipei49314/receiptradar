@@ -32,3 +32,7 @@ apps/mobile/pubspec.lock
 
 # OS
 Desktop.ini
+
+# local smoke
+target/
+
