@@ -18,7 +18,7 @@ default-members = [
 version = "0.1.0-alpha.0"
 edition = "2021"
 license = "Apache-2.0"
-repository = "https://github.com/receiptradar/receiptradar"
+repository = "https://github.com/taipei49314/receiptradar"
 rust-version = "1.78"
 authors = ["ReceiptRadar Contributors"]
 

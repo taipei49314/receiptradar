@@ -1,7 +1,11 @@
 # ReceiptRadar（發票雷達）
 
+[![ci](https://github.com/taipei49314/receiptradar/actions/workflows/ci.yml/badge.svg)](https://github.com/taipei49314/receiptradar/actions/workflows/ci.yml)
+
 **Snap. Parse. Own your spending.**  
 Offline receipt → ledger. Local-first. No account.
+
+**Repo:** https://github.com/taipei49314/receiptradar
 
 > **CLI product is complete** for daily local bookkeeping (mock OCR + text/QR fixtures).  
 > Real ONNX + mobile camera are optional next layers.

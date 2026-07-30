@@ -43,6 +43,8 @@ rradar list --query 全家 --currency TWD
 rradar show <id>
 rradar stats              # this calendar month, per currency
 rradar stats --all
+rradar stats --from 2024-01-01 --to 2024-12-31
+rradar top --currency TWD --limit 10
 
 # 4) Fix mistakes
 rradar edit <id> --amount 99 --notes "招待客戶"
