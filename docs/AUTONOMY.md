@@ -1,7 +1,23 @@
 # Autonomous loop log
 
-**Mode:** plan → execute → verify → re-plan  
-**Project:** ReceiptRadar CLI-first
+**Mode:** plan → execute → verify → re-plan → push  
+**Project:** ReceiptRadar CLI-first  
+
+## Standing schedule
+
+| 項目 | 設定 |
+|------|------|
+| 節奏 | **每 3 小時**推進一次 |
+| 粒度 | **大框架**（架構／產品主軸），不是小修 nits |
+| 方式 | Grok 排程（durable），`fire` 後自動 pull → 做 → test/clippy → push |
+| Remote | `https://github.com/taipei49314/receiptradar` |
+
+### 大框架主軸候選
+1. 真 OCR / ONNX 可跑路徑  
+2. 帳本／備份／schema 邊界（無官方 cloud）  
+3. Mobile / FFI 骨架  
+4. 發版與 CI  
+5. 可演示閉環（demo + fixtures）
 
 ## Cycle 0 — CLI product complete
 - Full ledger CLI (`9856fff`)
