@@ -67,11 +67,18 @@ rradar delete <id> --yes
 rradar recategorize       # only category=other
 rradar config set default_currency TWD
 
-# 5) Export / backup
+# 5) Export / backup (local-only multi-device via file copy)
 rradar export csv -o month.csv
 rradar backup create -p 'your-passphrase' -o backup.rradar
+rradar backup info --in backup.rradar -p 'your-passphrase'
+rradar backup verify --in backup.rradar -p 'your-passphrase'
+rradar backup restore --in backup.rradar -p 'your-passphrase' --merge
+rradar import backup --in backup.rradar -p 'your-passphrase'
+rradar migrate                              # schema version / migrations
 rradar seal -p 'your-passphrase'          # → ledger.rrsealed
 ```
+
+Schema notes: [ledger-schema.md](./ledger-schema.md).
 
 ## TW e-invoice QR
 

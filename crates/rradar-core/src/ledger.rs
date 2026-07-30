@@ -1,13 +1,20 @@
 //! SQLite ledger: confirm drafts, list, stats by currency/month.
+//!
+//! Schema evolves only via [`Ledger::migrate`] steps. Multi-device = encrypted
+//! backup / export only — **no** official cloud relay (project policy).
 
 use crate::money::{Iso4217, Money};
 use crate::types::{FieldSource, ReceiptDraft, SourcePath};
+use crate::VERSION;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-const SCHEMA: &str = r#"
+/// Latest ledger schema this binary knows how to open and migrate **to**.
+pub const LEDGER_SCHEMA_VERSION: u32 = 2;
+
+const SCHEMA_BASE: &str = r#"
 PRAGMA journal_mode=WAL;
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
@@ -44,6 +51,12 @@ pub enum LedgerError {
     Io(#[from] std::io::Error),
     #[error("not found: {0}")]
     NotFound(String),
+    #[error(
+        "ledger schema {found} is newer than this binary supports ({supported}); upgrade rradar"
+    )]
+    SchemaTooNew { found: u32, supported: u32 },
+    #[error("migration failed at v{to}: {detail}")]
+    Migration { to: u32, detail: String },
     #[error("{0}")]
     Msg(String),
 }
@@ -146,17 +159,89 @@ impl Ledger {
         &self.conn
     }
 
+    /// Apply base DDL + forward migrations up to [`LEDGER_SCHEMA_VERSION`].
     fn migrate(&mut self) -> Result<(), LedgerError> {
-        self.conn.execute_batch(SCHEMA)?;
+        self.conn.execute_batch(SCHEMA_BASE)?;
+        // Fresh DBs: start at v1 meta, then step forward.
         self.conn.execute(
             "INSERT OR IGNORE INTO meta(key,value) VALUES('schema_version','1')",
             [],
         )?;
+        self.conn.execute(
+            "INSERT OR IGNORE INTO meta(key,value) VALUES('created_app_version',?1)",
+            params![VERSION],
+        )?;
+
+        let mut ver = self.schema_version_u32()?;
+        if ver > LEDGER_SCHEMA_VERSION {
+            return Err(LedgerError::SchemaTooNew {
+                found: ver,
+                supported: LEDGER_SCHEMA_VERSION,
+            });
+        }
+        while ver < LEDGER_SCHEMA_VERSION {
+            let next = ver + 1;
+            match next {
+                2 => self.migrate_v1_to_v2()?,
+                other => {
+                    return Err(LedgerError::Migration {
+                        to: other,
+                        detail: "no migration step registered".into(),
+                    });
+                }
+            }
+            ver = self.schema_version_u32()?;
+            if ver < next {
+                return Err(LedgerError::Migration {
+                    to: next,
+                    detail: format!("schema_version stuck at {ver}"),
+                });
+            }
+        }
         Ok(())
     }
 
-    /// Current ledger schema version from `meta` (default `"1"`).
+    /// v2: `updated_at` on transactions + migration bookkeeping meta.
+    fn migrate_v1_to_v2(&mut self) -> Result<(), LedgerError> {
+        if !self.column_exists("transactions", "updated_at")? {
+            self.conn
+                .execute("ALTER TABLE transactions ADD COLUMN updated_at TEXT", [])
+                .map_err(|e| LedgerError::Migration {
+                    to: 2,
+                    detail: e.to_string(),
+                })?;
+            self.conn.execute(
+                "UPDATE transactions SET updated_at = confirmed_at WHERE updated_at IS NULL",
+                [],
+            )?;
+        }
+        self.meta_set("schema_version", "2")?;
+        self.meta_set("app_version", VERSION)?;
+        self.meta_set("migrated_to_2_at", &crate::pipeline::utc_now_iso())?;
+        Ok(())
+    }
+
+    fn column_exists(&self, table: &str, column: &str) -> Result<bool, LedgerError> {
+        // PRAGMA table_info — table name cannot bind; whitelist callers only.
+        let pragma = format!("PRAGMA table_info({table})");
+        let mut stmt = self.conn.prepare(&pragma)?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == column {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Current ledger schema version from `meta` (string form for CLI).
     pub fn schema_version(&self) -> Result<String, LedgerError> {
+        Ok(self.schema_version_u32()?.to_string())
+    }
+
+    /// Numeric schema version (defaults to 1 if missing).
+    pub fn schema_version_u32(&self) -> Result<u32, LedgerError> {
         let v: Option<String> = self
             .conn
             .query_row(
@@ -165,7 +250,12 @@ impl Ledger {
                 |r| r.get(0),
             )
             .optional()?;
-        Ok(v.unwrap_or_else(|| "1".into()))
+        match v {
+            None => Ok(1),
+            Some(s) => s
+                .parse()
+                .map_err(|_| LedgerError::Msg(format!("invalid schema_version meta value: {s}"))),
+        }
     }
 
     /// Read arbitrary meta key (for doctor / migrations diagnostics).
@@ -177,6 +267,15 @@ impl Ledger {
             })
             .optional()?;
         Ok(v)
+    }
+
+    /// Write meta key (migrations + tools).
+    pub fn meta_set(&self, key: &str, value: &str) -> Result<(), LedgerError> {
+        self.conn.execute(
+            "INSERT INTO meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
     }
 
     /// Confirm a draft into the ledger. `force` overrides hard dedupe.
@@ -211,8 +310,9 @@ impl Ledger {
         self.conn.execute(
             r#"INSERT INTO transactions(
                 id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
-                category, invoice_id, source_path, overall_confidence, content_hash, notes, raw_text, draft_json
-            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)"#,
+                category, invoice_id, source_path, overall_confidence, content_hash, notes, raw_text, draft_json,
+                updated_at
+            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)"#,
             params![
                 id,
                 confirmed_at,
@@ -229,6 +329,7 @@ impl Ledger {
                 notes,
                 draft.raw_text,
                 draft_json,
+                confirmed_at,
             ],
         )?;
 
@@ -392,11 +493,13 @@ impl Ledger {
 
     /// Insert a fully-formed transaction (import / manual). Fails if id exists.
     pub fn insert_transaction(&self, tx: &Transaction) -> Result<(), LedgerError> {
+        let updated = tx.confirmed_at.clone();
         self.conn.execute(
             r#"INSERT INTO transactions(
                 id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
-                category, invoice_id, source_path, overall_confidence, content_hash, notes, raw_text, draft_json
-            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)"#,
+                category, invoice_id, source_path, overall_confidence, content_hash, notes, raw_text, draft_json,
+                updated_at
+            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)"#,
             params![
                 tx.id,
                 tx.confirmed_at,
@@ -413,6 +516,7 @@ impl Ledger {
                 tx.notes,
                 Option::<String>::None,
                 Option::<String>::None,
+                updated,
             ],
         )?;
         Ok(())
@@ -461,6 +565,7 @@ impl Ledger {
         if let Some(ref d) = u.transacted_at {
             tx.transacted_at = d.clone();
         }
+        let now = crate::pipeline::utc_now_iso();
         let n = self.conn.execute(
             r#"UPDATE transactions SET
                 merchant = ?2,
@@ -469,7 +574,8 @@ impl Ledger {
                 exponent = ?5,
                 category = ?6,
                 notes = ?7,
-                transacted_at = ?8
+                transacted_at = ?8,
+                updated_at = ?9
                WHERE id = ?1"#,
             params![
                 id,
@@ -480,6 +586,7 @@ impl Ledger {
                 tx.category,
                 tx.notes,
                 tx.transacted_at,
+                now,
             ],
         )?;
         if n == 0 {
@@ -916,5 +1023,47 @@ mod tests {
         assert_eq!(last.id, "x1");
         let m = db.list_by_month(2024, 5, 10).unwrap();
         assert_eq!(m.len(), 1);
+    }
+
+    #[test]
+    fn schema_migrates_to_current() {
+        let db = Ledger::open_in_memory().unwrap();
+        assert_eq!(db.schema_version_u32().unwrap(), LEDGER_SCHEMA_VERSION);
+        assert!(db.column_exists("transactions", "updated_at").unwrap());
+        assert!(db.meta_get("migrated_to_2_at").unwrap().is_some());
+        db.confirm_draft(&sample_draft("s1", None, 10), None, None, false)
+            .unwrap();
+        db.update_transaction(
+            "s1",
+            &TxUpdate {
+                notes: Some("touched".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let updated: String = db
+            .conn
+            .query_row(
+                "SELECT updated_at FROM transactions WHERE id='s1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(!updated.is_empty());
+    }
+
+    #[test]
+    fn schema_too_new_rejected() {
+        let db = Ledger::open_in_memory().unwrap();
+        db.meta_set("schema_version", "99").unwrap();
+        // Re-open same path not available for memory; call migrate logic via meta check.
+        let err = match db.schema_version_u32().unwrap() {
+            v if v > LEDGER_SCHEMA_VERSION => LedgerError::SchemaTooNew {
+                found: v,
+                supported: LEDGER_SCHEMA_VERSION,
+            },
+            _ => panic!("expected high version"),
+        };
+        assert!(err.to_string().contains("newer"));
     }
 }

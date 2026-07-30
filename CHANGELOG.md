@@ -3,6 +3,8 @@
 ## 0.1.0-alpha (unreleased)
 
 ### Added
+- **Ledger schema v2** + forward migrations (`LEDGER_SCHEMA_VERSION`); `updated_at`; `rradar migrate`; `docs/ledger-schema.md`
+- **Backup UX:** `backup info|verify`, `restore --merge`, `import backup`; manifest `ledger_schema_version`
 - **`rradar demo`**: isolated closed-loop (fixtures → ledger → export → backup); `scripts/demo.ps1` / `demo.sh`; expanded fixture matrix + mock OCR bins; CI demo step
 - FFI: `confirm_draft_json`, `stats_all_json`, `ledger_schema_version`, `ensure_ledger`
 - Doctor: ledger schema version; demo hint

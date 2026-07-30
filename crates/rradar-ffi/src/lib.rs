@@ -148,7 +148,7 @@ mod tests {
         let stats = stats_all_json(db.display().to_string(), None).unwrap();
         assert!(stats.contains("TWD"), "{stats}");
         let ver = ledger_schema_version(db.display().to_string(), None).unwrap();
-        assert_eq!(ver, "1");
+        assert_eq!(ver, "2");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

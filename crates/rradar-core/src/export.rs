@@ -24,12 +24,31 @@ pub enum ExportError {
     Format(String),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupManifest {
+    /// Backup package format version (wire/archive layout).
     pub schema_version: u32,
     pub created_at: String,
     pub app_version: String,
     pub transaction_count: i64,
+    /// Ledger SQLite schema version at backup time (0 = legacy / unknown).
+    #[serde(default)]
+    pub ledger_schema_version: u32,
+}
+
+/// Opened backup with archive inventory (for `backup info` / verify).
+#[derive(Debug, Clone, Serialize)]
+pub struct BackupInspect {
+    pub manifest: BackupManifest,
+    pub files: Vec<BackupFileInfo>,
+    pub has_sqlite: bool,
+    pub has_transactions_json: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BackupFileInfo {
+    pub name: String,
+    pub bytes: usize,
 }
 
 /// Simple multi-file archive (not tar — portable, length-prefixed).
@@ -120,11 +139,13 @@ pub fn create_backup(
 ) -> Result<Vec<u8>, ExportError> {
     let txs = ledger.export_all()?;
     let sqlite = ledger.export_sqlite_bytes()?;
+    let ledger_schema = ledger.schema_version_u32().unwrap_or(0);
     let manifest = BackupManifest {
         schema_version: 1,
         created_at: utc_now_iso(),
         app_version: VERSION.to_string(),
         transaction_count: txs.len() as i64,
+        ledger_schema_version: ledger_schema,
     };
     let manifest_json = serde_json::to_vec_pretty(&manifest)?;
     let txs_json = serde_json::to_vec(&txs)?;
@@ -134,6 +155,61 @@ pub fn create_backup(
         ("transactions.json", &txs_json),
     ]);
     Ok(seal_backup(passphrase, &archive, m_kib)?)
+}
+
+/// Decrypt and inventory a backup without writing a database.
+pub fn inspect_backup(passphrase: &str, sealed: &[u8]) -> Result<BackupInspect, ExportError> {
+    let plain = unseal_backup(passphrase, sealed)?;
+    let files_raw = unpack_archive(&plain)?;
+    let mut manifest: Option<BackupManifest> = None;
+    let mut has_sqlite = false;
+    let mut has_transactions_json = false;
+    let mut files = Vec::with_capacity(files_raw.len());
+    for (name, data) in &files_raw {
+        match name.as_str() {
+            "manifest.json" => manifest = Some(serde_json::from_slice(data)?),
+            "ledger.sqlite" => has_sqlite = true,
+            "transactions.json" => has_transactions_json = true,
+            _ => {}
+        }
+        files.push(BackupFileInfo {
+            name: name.clone(),
+            bytes: data.len(),
+        });
+    }
+    let manifest = manifest.ok_or_else(|| ExportError::Format("missing manifest".into()))?;
+    Ok(BackupInspect {
+        manifest,
+        files,
+        has_sqlite,
+        has_transactions_json,
+    })
+}
+
+/// Decrypt + structural check (required entries present). Returns manifest on success.
+pub fn verify_backup(passphrase: &str, sealed: &[u8]) -> Result<BackupManifest, ExportError> {
+    let info = inspect_backup(passphrase, sealed)?;
+    if !info.has_sqlite {
+        return Err(ExportError::Format("missing ledger.sqlite".into()));
+    }
+    if !info.has_transactions_json {
+        return Err(ExportError::Format("missing transactions.json".into()));
+    }
+    if info.manifest.transaction_count < 0 {
+        return Err(ExportError::Format("invalid transaction_count".into()));
+    }
+    Ok(info.manifest)
+}
+
+/// Parse transactions array from a restored backup (for merge import).
+pub fn transactions_from_backup(
+    restored: &RestoredBackup,
+) -> Result<Vec<Transaction>, ExportError> {
+    let raw = restored
+        .transactions_json
+        .as_ref()
+        .ok_or_else(|| ExportError::Format("missing transactions.json".into()))?;
+    Ok(serde_json::from_slice(raw)?)
 }
 
 pub fn create_backup_default_params(
@@ -223,8 +299,16 @@ mod tests {
         let sealed = create_backup(&db, "secret", 8).unwrap();
         let restored = restore_backup("secret", &sealed).unwrap();
         assert_eq!(restored.manifest.transaction_count, 1);
+        assert!(restored.manifest.ledger_schema_version >= 1);
         assert!(restored.sqlite_bytes.unwrap().len() > 100);
         assert!(restore_backup("wrong", &sealed).is_err());
+
+        let info = inspect_backup("secret", &sealed).unwrap();
+        assert!(info.has_sqlite && info.has_transactions_json);
+        let m = verify_backup("secret", &sealed).unwrap();
+        assert_eq!(m.transaction_count, 1);
+        let txs = transactions_from_backup(&restore_backup("secret", &sealed).unwrap()).unwrap();
+        assert_eq!(txs.len(), 1);
     }
 
     #[test]

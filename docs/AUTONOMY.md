@@ -99,12 +99,28 @@
 - One-command recordable path from repo root; default user ledger untouched
 - Fixtures sized for GIF / launch T0 narrative
 
+## Cycle 13 — ledger schema / backup architecture (main axis #2)
+
+### Plan
+1. Forward-only schema migration framework; **v2** (`updated_at` + migration meta)
+2. `SchemaTooNew` guard; `LEDGER_SCHEMA_VERSION` constant; `rradar migrate`
+3. Backup UX: `info` / `verify` / `restore --merge`; `import backup`
+4. Manifest carries `ledger_schema_version`; docs `ledger-schema.md` (no cloud relay)
+
+### Verify
+- `cargo test --workspace` green (incl. schema + backup merge CLI tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` green
+
+### Result
+- Local-first multi-device path is **backup file only**, with clear schema boundaries
+- Opening any ledger auto-migrates to v2
+
 ### Next seeds
 | Priority | Item |
 |----------|------|
-| P1 | Keep CI green; pin ONNX `manifest.sha256` after trusted download |
-| P2 | Mobile/Flutter generate when SDK present; grow FFI |
-| P3 | A04 device metrics; release install polish |
+| P1 | Keep CI green |
+| P2 | Mobile/FFI + Flutter when SDK present |
+| P3 | ONNX hash pin / release install polish |
 
 ## Rules
 - No questions between cycles unless secrets / destructive remote  

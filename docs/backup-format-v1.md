@@ -32,9 +32,11 @@ Required entries:
 
 | Name | Content |
 |------|---------|
-| `manifest.json` | `schema_version`, `created_at`, `app_version`, `transaction_count` |
+| `manifest.json` | `schema_version` (package), `created_at`, `app_version`, `transaction_count`, optional `ledger_schema_version` |
 | `ledger.sqlite` | SQLite DB bytes |
-| `transactions.json` | Array of transaction rows (convenience) |
+| `transactions.json` | Array of transaction rows (convenience; used by `--merge` / `import backup`) |
+
+CLI helpers: `rradar backup info|verify|restore [--merge]`. Multi-device = user-mediated file copy only (no official relay). See [ledger-schema.md](./ledger-schema.md).
 
 ## Sealed DB (P2 at-rest) `.rrsealed`
 

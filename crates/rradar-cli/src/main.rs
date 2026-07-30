@@ -1,10 +1,11 @@
 //! `rradar` — complete local-first receipt ledger CLI.
 
 use rradar_core::{
-    apply_edits, create_backup, data_dir, default_db_path, ensure_data_dir, open_ledger_auto,
-    process_path, restore_backup, save_sealed, transactions_to_csv, transactions_to_json,
-    write_restored_db, AppConfig, CategoryEngine, Iso4217, Money, ProcessOptions, ReceiptDraft,
-    Transaction, TxUpdate, UserEdits, PRODUCT_ID, VERSION,
+    apply_edits, create_backup, data_dir, default_db_path, ensure_data_dir, inspect_backup,
+    open_ledger_auto, process_path, restore_backup, save_sealed, transactions_from_backup,
+    transactions_to_csv, transactions_to_json, verify_backup, write_restored_db, AppConfig,
+    CategoryEngine, Iso4217, Money, ProcessOptions, ReceiptDraft, Transaction, TxUpdate, UserEdits,
+    LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
 };
 use rradar_ocr::engine_by_name;
 use std::env;
@@ -50,6 +51,7 @@ fn main() -> ExitCode {
         "categories" | "cats" => cmd_categories(),
         "export" => cmd_export(&args[1..]),
         "backup" => cmd_backup(&args[1..]),
+        "migrate" => cmd_migrate(&args[1..]),
         "seal" => cmd_seal(&args[1..]),
         "unseal" => cmd_unseal(&args[1..]),
         "path" => {
@@ -174,6 +176,7 @@ fn cmd_doctor(_args: &[String]) -> Result<(), String> {
     println!("  config:   {}", AppConfig::path().display());
     println!("  currency: {}", cfg.default_currency);
     let db = default_db_path();
+    println!("  schema:   supports ledger v{LEDGER_SCHEMA_VERSION} (local-first; no cloud relay)");
     if db.is_file() {
         match rradar_core::Ledger::open(&db) {
             Ok(l) => {
@@ -811,20 +814,92 @@ fn cmd_manual(args: &[String]) -> Result<(), String> {
 
 fn cmd_import(args: &[String]) -> Result<(), String> {
     // rradar import json path.json
-    if args.len() < 2 || args[0] != "json" {
-        return Err("usage: rradar import json <file.json>".into());
+    // rradar import backup --in file.rradar -p PASS [--db PATH]
+    if args.is_empty() {
+        return Err(
+            "usage: rradar import json <file.json> | rradar import backup --in file.rradar -p PASS"
+                .into(),
+        );
     }
-    let path = &args[1];
-    let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let rows: Vec<Transaction> = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    match args[0].as_str() {
+        "json" => {
+            let path = args.get(1).ok_or("usage: rradar import json <file.json>")?;
+            let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+            let rows: Vec<Transaction> = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+            let flags = extract_db_from_all(args)?;
+            let _ = ensure_data_dir();
+            let (ledger, tmp) = open_db(&flags)?;
+            let (ins, skip) = ledger
+                .import_transactions(&rows)
+                .map_err(|e| e.to_string())?;
+            println!("import | inserted={ins} skipped={skip}");
+            maybe_reseal(&flags, &ledger, tmp)?;
+            Ok(())
+        }
+        "backup" | "rradar" => {
+            // Merge transactions from encrypted backup into current ledger (skip existing ids).
+            let mut input = None;
+            let mut pass = None;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--in" | "-i" => {
+                        i += 1;
+                        input = Some(PathBuf::from(args.get(i).ok_or("needs value")?));
+                    }
+                    "--passphrase" | "-p" => {
+                        i += 1;
+                        pass = Some(args.get(i).ok_or("needs value")?.clone());
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            let input = input.ok_or("--in required")?;
+            let pass = pass.ok_or("--passphrase required")?;
+            let sealed = std::fs::read(&input).map_err(|e| e.to_string())?;
+            let restored = restore_backup(&pass, &sealed).map_err(|e| e.to_string())?;
+            let rows = transactions_from_backup(&restored).map_err(|e| e.to_string())?;
+            let flags = extract_db_from_all(args)?;
+            let _ = ensure_data_dir();
+            let (ledger, tmp) = open_db(&flags)?;
+            let (ins, skip) = ledger
+                .import_transactions(&rows)
+                .map_err(|e| e.to_string())?;
+            println!(
+                "import backup | inserted={ins} skipped={skip} (from {} txs; multi-device via backup only)",
+                rows.len()
+            );
+            maybe_reseal(&flags, &ledger, tmp)?;
+            Ok(())
+        }
+        other => Err(format!(
+            "unknown import type `{other}` — try: import json | import backup"
+        )),
+    }
+}
+
+/// Open ledger (runs migrations) and print schema status.
+fn cmd_migrate(args: &[String]) -> Result<(), String> {
     let flags = extract_db_from_all(args)?;
     let _ = ensure_data_dir();
+    if let Some(parent) = flags.db.parent() {
+        if !parent.as_os_str().is_empty() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
     let (ledger, tmp) = open_db(&flags)?;
-    let (ins, skip) = ledger
-        .import_transactions(&rows)
-        .map_err(|e| e.to_string())?;
-    println!("import | inserted={ins} skipped={skip}");
-    maybe_reseal(&flags, &ledger, tmp)?;
+    let ver = ledger.schema_version().map_err(|e| e.to_string())?;
+    let n = ledger.count().map_err(|e| e.to_string())?;
+    println!("migrate | db={}", flags.db.display());
+    println!("migrate | schema={ver} (binary supports {LEDGER_SCHEMA_VERSION})");
+    println!("migrate | transactions={n}");
+    if let Some(app) = ledger.meta_get("app_version").ok().flatten() {
+        println!("migrate | app_version_meta={app}");
+    }
+    if let Some(t) = tmp {
+        let _ = std::fs::remove_file(t);
+    }
     Ok(())
 }
 
@@ -1341,9 +1416,80 @@ fn cmd_export(args: &[String]) -> Result<(), String> {
 
 fn cmd_backup(args: &[String]) -> Result<(), String> {
     if args.is_empty() {
-        return Err("usage: rradar backup <create|restore> ...".into());
+        return Err(
+            "usage: rradar backup <create|restore|info|verify> ... (local-only; no cloud)".into(),
+        );
     }
     match args[0].as_str() {
+        "info" | "inspect" => {
+            let mut input = None;
+            let mut pass = None;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--in" | "-i" => {
+                        i += 1;
+                        input = Some(PathBuf::from(args.get(i).ok_or("needs value")?));
+                    }
+                    "--passphrase" | "-p" => {
+                        i += 1;
+                        pass = Some(args.get(i).ok_or("needs value")?.clone());
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            let input = input.ok_or("--in required")?;
+            let pass = pass.ok_or("--passphrase required")?;
+            let sealed = std::fs::read(&input).map_err(|e| e.to_string())?;
+            let info = inspect_backup(&pass, &sealed).map_err(|e| e.to_string())?;
+            println!("backup info | {}", input.display());
+            println!(
+                "  package_schema={}  ledger_schema={}  txs={}  app={}  created={}",
+                info.manifest.schema_version,
+                info.manifest.ledger_schema_version,
+                info.manifest.transaction_count,
+                info.manifest.app_version,
+                info.manifest.created_at
+            );
+            println!(
+                "  has_sqlite={}  has_transactions_json={}",
+                info.has_sqlite, info.has_transactions_json
+            );
+            for f in &info.files {
+                println!("  file | {:>8} B  {}", f.bytes, f.name);
+            }
+            println!("  policy | local-first; multi-device = copy this file (no official relay)");
+            Ok(())
+        }
+        "verify" => {
+            let mut input = None;
+            let mut pass = None;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--in" | "-i" => {
+                        i += 1;
+                        input = Some(PathBuf::from(args.get(i).ok_or("needs value")?));
+                    }
+                    "--passphrase" | "-p" => {
+                        i += 1;
+                        pass = Some(args.get(i).ok_or("needs value")?.clone());
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            let input = input.ok_or("--in required")?;
+            let pass = pass.ok_or("--passphrase required")?;
+            let sealed = std::fs::read(&input).map_err(|e| e.to_string())?;
+            let m = verify_backup(&pass, &sealed).map_err(|e| e.to_string())?;
+            println!(
+                "backup verify | OK  txs={}  ledger_schema={}  app={}",
+                m.transaction_count, m.ledger_schema_version, m.app_version
+            );
+            Ok(())
+        }
         "create" => {
             let mut pass = None;
             let mut out = None;
@@ -1395,6 +1541,7 @@ fn cmd_backup(args: &[String]) -> Result<(), String> {
             let mut input = None;
             let mut pass = None;
             let mut db = None;
+            let mut merge = false;
             let mut i = 1;
             while i < args.len() {
                 match args[i].as_str() {
@@ -1410,6 +1557,7 @@ fn cmd_backup(args: &[String]) -> Result<(), String> {
                         i += 1;
                         db = Some(PathBuf::from(args.get(i).ok_or("needs value")?));
                     }
+                    "--merge" => merge = true,
                     _ => {}
                 }
                 i += 1;
@@ -1417,20 +1565,48 @@ fn cmd_backup(args: &[String]) -> Result<(), String> {
             let input = input.ok_or("--in required")?;
             let pass = pass.ok_or("--passphrase required")?;
             let db = db.unwrap_or_else(default_db_path);
-            let sealed = std::fs::read(input).map_err(|e| e.to_string())?;
+            let sealed = std::fs::read(&input).map_err(|e| e.to_string())?;
             let restored = restore_backup(&pass, &sealed).map_err(|e| e.to_string())?;
-            let sqlite = restored
-                .sqlite_bytes
-                .ok_or("backup missing ledger.sqlite")?;
-            write_restored_db(&db, &sqlite).map_err(|e| e.to_string())?;
-            println!(
-                "restored\t{} txs\t-> {}",
-                restored.manifest.transaction_count,
-                db.display()
-            );
+            if merge {
+                let rows = transactions_from_backup(&restored).map_err(|e| e.to_string())?;
+                let flags = DbFlags {
+                    db: db.clone(),
+                    passphrase: None,
+                };
+                let _ = ensure_data_dir();
+                if let Some(parent) = flags.db.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let (ledger, tmp) = open_db(&flags)?;
+                let (ins, skip) = ledger
+                    .import_transactions(&rows)
+                    .map_err(|e| e.to_string())?;
+                println!(
+                    "restored(merge)\tinserted={ins}\tskipped={skip}\t-> {}",
+                    db.display()
+                );
+                if let Some(t) = tmp {
+                    let _ = std::fs::remove_file(t);
+                }
+            } else {
+                let sqlite = restored
+                    .sqlite_bytes
+                    .ok_or("backup missing ledger.sqlite")?;
+                write_restored_db(&db, &sqlite).map_err(|e| e.to_string())?;
+                // Open once so migrations apply if restoring older schema snapshot.
+                let ledger = rradar_core::Ledger::open(&db).map_err(|e| e.to_string())?;
+                println!(
+                    "restored\t{} txs\tschema={}\t-> {}",
+                    restored.manifest.transaction_count,
+                    ledger.schema_version().unwrap_or_default(),
+                    db.display()
+                );
+            }
             Ok(())
         }
-        other => Err(format!("unknown backup subcommand {other}")),
+        other => Err(format!(
+            "unknown backup subcommand {other} — try create|restore|info|verify"
+        )),
     }
 }
 
@@ -1606,11 +1782,17 @@ export csv|json [-o file] [--db PATH]
   CSV includes UTF-8 BOM for Excel.",
         "import" => "\
 import json <file.json> [--db PATH]
-  Import array of transaction objects; skips existing ids.",
+import backup --in file.rradar -p PASS [--db PATH]
+  JSON array or merge transactions from encrypted backup (skip existing ids).",
+        "migrate" => "\
+migrate [--db PATH]
+  Open ledger, apply schema migrations, print version and count.",
         "backup" => "\
 backup create -p PASS [-o file] [--db PATH]
-backup restore --in file -p PASS [--db PATH]
-  Argon2id + XChaCha20-Poly1305. RRADAR_FAST_BACKUP=1 for weak/fast tests.",
+backup restore --in file -p PASS [--db PATH] [--merge]
+backup info|verify --in file -p PASS
+  Argon2id + XChaCha20-Poly1305. Local-only multi-device via file copy.
+  --merge inserts missing txs into existing ledger. RRADAR_FAST_BACKUP=1 for tests.",
         "seal" | "unseal" => "\
 seal [--db ledger.db] -o file.rrsealed -p PASS
 unseal --in file.rrsealed -o ledger.db -p PASS
@@ -1680,7 +1862,9 @@ Commands:
   clear --yes          Wipe all transactions
   categories           List category ids
   export csv|json      Export ledger
-  backup create|restore
+  backup create|restore|info|verify
+  import json|backup   Import JSON array or merge from .rradar
+  migrate              Apply/report ledger schema migrations
   seal / unseal        Whole-file encryption (.rrsealed)
 
 process options:

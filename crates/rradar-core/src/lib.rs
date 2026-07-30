@@ -21,12 +21,13 @@ pub use category::CategoryEngine;
 pub use config::AppConfig;
 pub use explain::ExplainTrace;
 pub use export::{
-    create_backup, create_backup_default_params, restore_backup, transactions_to_csv,
-    transactions_to_json, write_restored_db, ExportError,
+    create_backup, create_backup_default_params, inspect_backup, restore_backup,
+    transactions_from_backup, transactions_to_csv, transactions_to_json, verify_backup,
+    write_restored_db, BackupFileInfo, BackupInspect, BackupManifest, ExportError, RestoredBackup,
 };
 pub use ledger::{
     apply_edits, ConfirmResult, CurrencyMonthStat, DedupeLevel, DedupeWarning, Ledger, LedgerError,
-    Transaction, TxUpdate, UserEdits,
+    Transaction, TxUpdate, UserEdits, LEDGER_SCHEMA_VERSION,
 };
 pub use money::{sum_same_currency, Iso4217, Money, MoneyError};
 pub use paths::{data_dir, default_db_path, ensure_data_dir};

@@ -97,6 +97,129 @@ fn init_process_list_stats_export_edit_delete() {
 }
 
 #[test]
+fn backup_info_verify_and_merge() {
+    let fx = fixtures();
+    let home = std::env::temp_dir().join(format!("rradar-bak-test-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&home);
+    let db = home.join("ledger.db");
+    let bak = home.join("t.rradar");
+
+    assert!(bin()
+        .args(["init"])
+        .env("RRADAR_HOME", &home)
+        .env("RRADAR_DB", &db)
+        .output()
+        .unwrap()
+        .status
+        .success());
+
+    // Use isolated env for remaining commands via bin() which already sets home —
+    // override DB path explicitly.
+    let mut c = bin();
+    c.env("RRADAR_HOME", &home);
+    c.env("RRADAR_DB", &db);
+    let out = c
+        .args([
+            "process",
+            fx.to_str().unwrap(),
+            "--confirm",
+            "-q",
+            "--db",
+            db.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let out = bin()
+        .env("RRADAR_HOME", &home)
+        .env("RRADAR_DB", &db)
+        .env("RRADAR_FAST_BACKUP", "1")
+        .args([
+            "backup",
+            "create",
+            "-p",
+            "test-pass",
+            "-o",
+            bak.to_str().unwrap(),
+            "--db",
+            db.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(bak.is_file());
+
+    let out = bin()
+        .args([
+            "backup",
+            "info",
+            "--in",
+            bak.to_str().unwrap(),
+            "-p",
+            "test-pass",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(s.contains("ledger_schema"), "{s}");
+    assert!(s.contains("local-first"), "{s}");
+
+    let out = bin()
+        .args([
+            "backup",
+            "verify",
+            "--in",
+            bak.to_str().unwrap(),
+            "-p",
+            "test-pass",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("OK"));
+
+    let out = bin()
+        .args(["migrate", "--db", db.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("schema="));
+
+    // Merge into empty second db
+    let db2 = home.join("ledger2.db");
+    let out = bin()
+        .args([
+            "backup",
+            "restore",
+            "--in",
+            bak.to_str().unwrap(),
+            "-p",
+            "test-pass",
+            "--db",
+            db2.to_str().unwrap(),
+            "--merge",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("inserted="));
+}
+
+#[test]
 fn demo_closed_loop() {
     let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
     assert!(fixtures.is_dir(), "fixtures missing");
