@@ -179,13 +179,27 @@ pub fn extract_l1_fields(
 
 fn line_has_total_keyword(line: &str) -> bool {
     let u = line.to_uppercase();
-    ["合計", "總計", "總額", "應收", "AMOUNT", "TOTAL", "應稅"]
+    // Chinese / shared
+    if ["合計", "總計", "總額", "應收", "應付", "實付", "刷卡", "應稅", "付款"]
         .iter()
-        .any(|k| line.contains(k) || u.contains(k))
+        .any(|k| line.contains(k))
+    {
+        return true;
+    }
+    if u.contains("GRAND TOTAL") || u.contains("BALANCE DUE") {
+        return true;
+    }
+    // Avoid matching TOTAL inside SUBTOTAL
+    if u.contains("SUBTOTAL") {
+        return false;
+    }
+    u.contains("TOTAL") || u.contains("AMOUNT DUE") || u.contains(" AMOUNT")
 }
 
 fn line_has_subtotal_keyword(line: &str) -> bool {
-    ["小計", "銷售額", "未稅"].iter().any(|k| line.contains(k))
+    ["小計", "銷售額", "未稅", "SUBTOTAL", "稅前"]
+        .iter()
+        .any(|k| line.contains(k) || line.to_uppercase().contains(k))
 }
 
 fn detect_currency(line: &str, raw: &str, default: Iso4217) -> Iso4217 {
@@ -299,5 +313,21 @@ mod tests {
         let b = blocks(&["發票號碼 AB12345678", "合計 50"]);
         let f = extract_l1_fields(&b, Iso4217::TWD, &mut ex);
         assert_eq!(f.invoice_id.unwrap().value, "AB12345678");
+    }
+
+    #[test]
+    fn prefer_total_over_subtotal() {
+        let mut ex = ExplainTrace::new("mock", "ocr");
+        let b = blocks(&["咖啡店", "小計 80", "總計 88"]);
+        let f = extract_l1_fields(&b, Iso4217::TWD, &mut ex);
+        assert_eq!(f.total.unwrap().value.amount_minor, 8800);
+    }
+
+    #[test]
+    fn grand_total_english() {
+        let mut ex = ExplainTrace::new("mock", "ocr");
+        let b = blocks(&["CAFE", "SUBTOTAL 10.00", "TOTAL 11.00"]);
+        let f = extract_l1_fields(&b, Iso4217::USD, &mut ex);
+        assert_eq!(f.total.unwrap().value.amount_minor, 1100);
     }
 }

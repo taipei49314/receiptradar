@@ -83,4 +83,15 @@ fn init_process_list_stats_export_edit_delete() {
     assert!(out.status.success());
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v.as_array().unwrap().len(), 0);
+
+    let out = bin().args(["help", "process"]).output().unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("--confirm"));
+
+    let out = bin()
+        .args(["manual", "--merchant", "ManualShop", "--amount", "3"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("confirmed"));
 }

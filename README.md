@@ -62,8 +62,13 @@ rradar help
 ```bash
 cargo test --workspace
 cargo run -p rradar-cli -- doctor
+cargo run -p rradar-cli -- help process
 cargo run -p bench-ocr -- fixtures/text
+# Windows smoke:
+powershell -File scripts/smoke-cli.ps1
 ```
+
+Release: [docs/RELEASE.md](./docs/RELEASE.md) · tag `v*` runs [.github/workflows/release.yml](./.github/workflows/release.yml).
 
 ## License
 

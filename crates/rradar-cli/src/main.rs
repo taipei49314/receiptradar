@@ -19,8 +19,12 @@ fn main() -> ExitCode {
     }
     let result = match args[0].as_str() {
         "help" | "--help" | "-h" => {
-            print_help();
-            Ok(())
+            if args.len() > 1 {
+                print_topic_help(&args[1])
+            } else {
+                print_help();
+                Ok(())
+            }
         }
         "version" | "--version" | "-V" => {
             println!("{PRODUCT_ID} {VERSION}");
@@ -146,7 +150,7 @@ fn cmd_process(args: &[String]) -> Result<(), String> {
     let mut engine = "mock".to_string();
     let mut qr: Option<String> = None;
     let mut json = false;
-    let mut currency = Iso4217::TWD;
+    let mut currency = default_currency_from_env();
     let mut confirm = false;
     let mut db: Option<PathBuf> = None;
     let mut passphrase: Option<String> = None;
@@ -328,7 +332,7 @@ fn cmd_process(args: &[String]) -> Result<(), String> {
 fn cmd_manual(args: &[String]) -> Result<(), String> {
     let mut merchant = None;
     let mut amount = None;
-    let mut currency = Iso4217::TWD;
+    let mut currency = default_currency_from_env();
     let mut category = "other".to_string();
     let mut date = None;
     let mut notes = None;
@@ -365,7 +369,8 @@ fn cmd_manual(args: &[String]) -> Result<(), String> {
         }
         i += 1;
     }
-    let merchant = merchant.ok_or("usage: rradar manual --merchant NAME --amount 89 [--date YYYY-MM-DD]")?;
+    let merchant =
+        merchant.ok_or("usage: rradar manual --merchant NAME --amount 89 [--date YYYY-MM-DD]")?;
     let amount = amount.ok_or("--amount required")?;
     let money = Money::from_major_str(&amount, currency).map_err(|e| e.to_string())?;
     let day = date.unwrap_or_else(|| {
@@ -966,6 +971,70 @@ fn print_table(rows: &[Transaction]) {
     }
 }
 
+fn default_currency_from_env() -> Iso4217 {
+    std::env::var("RRADAR_DEFAULT_CURRENCY")
+        .ok()
+        .and_then(|s| Iso4217::parse(&s))
+        .unwrap_or(Iso4217::TWD)
+}
+
+fn print_topic_help(topic: &str) -> Result<(), String> {
+    let text = match topic {
+        "process" | "add" => "\
+process <files…> [options]
+  Parse receipt text/image (mock OCR by default). Multiple files = batch.
+  --confirm, -c     write to ledger (default db)
+  --explain         show amount candidates / rules
+  --json --quiet -q
+  --engine mock|onnx
+  --currency CODE   (or RRADAR_DEFAULT_CURRENCY)
+  --qr STR | --qr-file PATH
+  --merchant --amount --category --date --notes
+  --force           override hard dedupe
+  --db PATH -p PASS",
+        "manual" | "entry" => "\
+manual --merchant NAME --amount MAJOR [--currency TWD] [--category ID] [--date YYYY-MM-DD] [--notes N]
+  Insert a transaction without OCR. Alias: entry",
+        "list" | "ls" | "search" => "\
+list [--json] [--limit N] [--offset N] [--currency C] [--query Q] [--db PATH]
+  Aliases: ls, search. Table output uses | separators.",
+        "stats" => "\
+stats [--year Y --month M | --all] [--db PATH]
+  Per-currency totals only (never mixes currencies). Default: current UTC month.",
+        "export" => "\
+export csv|json [-o file] [--db PATH]
+  CSV includes UTF-8 BOM for Excel.",
+        "import" => "\
+import json <file.json> [--db PATH]
+  Import array of transaction objects; skips existing ids.",
+        "backup" => "\
+backup create -p PASS [-o file] [--db PATH]
+backup restore --in file -p PASS [--db PATH]
+  Argon2id + XChaCha20-Poly1305. RRADAR_FAST_BACKUP=1 for weak/fast tests.",
+        "seal" | "unseal" => "\
+seal [--db ledger.db] -o file.rrsealed -p PASS
+unseal --in file.rrsealed -o ledger.db -p PASS
+  Whole-file at-rest encryption (P2).",
+        "init" | "doctor" | "path" => "\
+init     create data dir + empty ledger
+doctor   health check
+path     print home + db paths
+  RRADAR_HOME / RRADAR_DB override defaults.",
+        "edit" | "delete" | "show" | "rm" => "\
+show <id>
+edit <id> [--merchant --amount --currency --category --notes --date]
+delete <id> --yes
+  edit/delete require --db for non-default ledgers.",
+        other => {
+            return Err(format!(
+                "no help topic `{other}` — try: process manual list stats export import backup seal"
+            ));
+        }
+    };
+    println!("rradar {topic}\n{text}");
+    Ok(())
+}
+
 fn print_help() {
     println!(
         "\
@@ -1009,8 +1078,10 @@ process options:
 
 Global data:
   Default db:  %APPDATA%\\receiptradar\\ledger.db  (or $XDG_DATA_HOME/receiptradar)
-  Override:    RRADAR_HOME, RRADAR_DB
+  Override:    RRADAR_HOME, RRADAR_DB, RRADAR_DEFAULT_CURRENCY
   Fast backup: RRADAR_FAST_BACKUP=1  (weaker Argon2 for tests)
+
+  rradar help <command>   detailed topic help
 
 No cloud. No account. Core path works offline.
 "
