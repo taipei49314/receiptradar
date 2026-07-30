@@ -49,13 +49,23 @@ Toolchain note: this machine used **stable-gnu + WinLibs MinGW** because MSVC `l
 
 CLI: `list`, `stats`, `export`, `backup create|restore`, `seal`, `process --confirm --db`.
 
-## Left for A18+ / risk path
+## A05 / A18 / A19 / CI (done 2026-07-30, autonomous)
 
-1. **A04** OCR size/latency spike on 2 Android devices → pin models  
-2. **A05** ONNX RapidOCR feature + hash-pinned fetch  
-3. **A18–A22** Flutter camera loop + offline flavor  
-4. **A23–A25** egress CI + README demo GIF + v0.1.0 release  
-5. SQLCipher P1 when Android NDK available (P2 sealed is default now)
+| Item | Status |
+|------|--------|
+| A05 ONNX module | Path validation + engine select; inference runtime post-Green spike |
+| A18 Flutter shell | `apps/mobile` onboarding/home/capture placeholder |
+| A19 FFI stub | `rradar-ffi` JSON helpers (FRB codegen later) |
+| Golden fixtures | `crates/rradar-core/tests/golden_fixtures.rs` |
+| CI | fmt/clippy/test + cli smoke + network-audit |
+
+## Left
+
+1. **A04 device** measurements (fill `docs/spike-ocr-size.md`)  
+2. **A05** full ORT inference when models pinned  
+3. **A19–A22** FRB + camera + flavors (needs Flutter/Android SDK)  
+4. **A24–A25** demo GIF + v0.1.0 release  
+5. SQLCipher P1 when Android NDK available
 
 ## Known limitations (A12)
 
