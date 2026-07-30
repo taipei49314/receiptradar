@@ -1,0 +1,19 @@
+[package]
+name = "rradar-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "ReceiptRadar CLI (rradar) — developer wow path and CI gate"
+repository.workspace = true
+
+[[bin]]
+name = "rradar"
+path = "src/main.rs"
+
+[dependencies]
+rradar-core = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]

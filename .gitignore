@@ -1,0 +1,34 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Flutter (future)
+apps/mobile/.dart_tool/
+apps/mobile/build/
+apps/mobile/.flutter-plugins
+apps/mobile/.flutter-plugins-dependencies
+apps/mobile/.packages
+apps/mobile/pubspec.lock
+
+# Models & secrets (never commit raw weights without explicit release process)
+/models/**/*.onnx
+/models/**/*.bin
+!/models/README.md
+*.pem
+.env
+.env.*
+
+# Local spike reports may contain device serials — keep redacted copies only
+/docs/spike-ocr-size.local.md
+
+# OS
+Desktop.ini

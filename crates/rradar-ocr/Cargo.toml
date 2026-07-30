@@ -1,0 +1,20 @@
+[package]
+name = "rradar-ocr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "ReceiptRadar OCR engine trait and backends (mock first; ONNX later)"
+repository.workspace = true
+
+[features]
+default = ["mock"]
+mock = []
+# onnx = ["ort", ...] — enabled in PR-A05 after spike
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
