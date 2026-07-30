@@ -8,7 +8,7 @@ Offline receipt → ledger. Local-first. No account.
 **Repo:** https://github.com/taipei49314/receiptradar
 
 > **CLI product is complete** for daily local bookkeeping (mock OCR + text/QR fixtures).  
-> Real ONNX + mobile camera are optional next layers.
+> Real ONNX OCR is available behind `--features onnx` (see `models/README.md`).
 
 [中文](./README.zh-TW.md) · [CLI guide](./docs/cli.md) · [Design](./docs/design-full.md)
 
@@ -59,7 +59,9 @@ rradar help
 | Engine | Use |
 |--------|-----|
 | `mock` (default) | Fixtures, CI, development |
-| `onnx` | After model pin (A04/A05); not required for CLI product |
+| `onnx` | Real RapidOCR: `tools/fetch-models.ps1 -FetchOrt` then `cargo run -p rradar-cli --features onnx -- process img.jpg --engine onnx` |
+
+Details: [models/README.md](./models/README.md).
 
 ## Develop
 
@@ -70,6 +72,8 @@ cargo run -p rradar-cli -- help process
 cargo run -p bench-ocr -- fixtures/text
 # Windows smoke:
 powershell -File scripts/smoke-cli.ps1
+# Optional real OCR build (heavy deps + models not in git):
+cargo test -p rradar-ocr --features onnx
 ```
 
 Release: [docs/RELEASE.md](./docs/RELEASE.md) · tag `v*` runs [.github/workflows/release.yml](./.github/workflows/release.yml).

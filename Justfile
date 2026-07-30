@@ -23,5 +23,18 @@ smoke:
 install:
     cargo install --path crates/rradar-cli --force --locked
 
+# Build with real ONNX RapidOCR (needs models + ORT at runtime — models/README.md)
+install-onnx:
+    cargo install --path crates/rradar-cli --force --locked --features onnx
+
 doctor:
     cargo run -q -p rradar-cli -- doctor
+
+doctor-onnx:
+    cargo run -q -p rradar-cli --features onnx -- doctor
+
+fetch-models:
+    powershell -NoProfile -ExecutionPolicy Bypass -File tools/fetch-models.ps1 -FetchOrt
+
+cli-onnx *args:
+    cargo run -q -p rradar-cli --features onnx -- {{args}}

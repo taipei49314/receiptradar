@@ -22,7 +22,10 @@ apps/mobile/pubspec.lock
 # Models & secrets (never commit raw weights without explicit release process)
 /models/**/*.onnx
 /models/**/*.bin
+/models/ort/
 !/models/README.md
+!/models/manifest.sha256
+!/models/manifest.sha256.example
 *.pem
 .env
 .env.*

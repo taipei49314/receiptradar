@@ -1,14 +1,17 @@
 //! OCR engine abstraction for ReceiptRadar.
 //!
-//! Mock backend is the CI default. ONNX path: `onnx` module + optional models dir.
+//! Mock backend is the CI default. ONNX path: `onnx` module + optional `--features onnx`.
 
 #![deny(unsafe_code)]
 
 pub mod onnx;
 
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
-pub use onnx::{OnnxConfig, OnnxOcrEngine};
+pub use onnx::{
+    auto_ort_dylib, ensure_ort_dylib_env, onnx_feature_enabled, OnnxConfig, OnnxOcrEngine,
+};
 
 /// One recognized text line.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -32,8 +35,10 @@ pub trait OcrEngine: Send + Sync {
 pub enum OcrError {
     #[error("empty image input")]
     EmptyInput,
-    #[error("onnx backend not enabled or models not ready (see PR-A04/A05)")]
+    #[error("onnx backend not enabled or models not ready (see models/README.md)")]
     OnnxUnavailable,
+    #[error("{0}")]
+    OnnxUnavailableWithHint(String),
     #[error("backend error: {0}")]
     Backend(String),
 }
@@ -97,9 +102,18 @@ pub fn engine_by_name(name: &str) -> Result<Box<dyn OcrEngine>, OcrError> {
         "mock" | "" => Ok(Box::new(MockOcrEngine)),
         "onnx" | "onnx-rapidocr" => {
             let dir = std::env::var("RRADAR_MODELS_DIR").unwrap_or_else(|_| "models".into());
-            let cfg = OnnxConfig::from_models_dir(dir);
+            ensure_ort_dylib_env(Path::new(&dir));
+            let cfg = OnnxConfig::from_models_dir(&dir);
             match OnnxOcrEngine::new(cfg.clone()) {
-                Ok(eng) => Ok(Box::new(eng)),
+                Ok(eng) => {
+                    // Only mark inference_enabled when feature is on; otherwise
+                    // still surface a precise hint on first recognize().
+                    if onnx_feature_enabled() {
+                        Ok(Box::new(eng))
+                    } else {
+                        Ok(Box::new(OnnxOcrEngine::unvalidated(cfg)))
+                    }
+                }
                 Err(_) => Ok(Box::new(OnnxOcrEngine::unvalidated(cfg))),
             }
         }
@@ -140,7 +154,7 @@ mod tests {
         let err = eng.recognize(b"x").unwrap_err();
         assert!(matches!(
             err,
-            OcrError::OnnxUnavailable | OcrError::Backend(_)
+            OcrError::OnnxUnavailable | OcrError::OnnxUnavailableWithHint(_) | OcrError::Backend(_)
         ));
     }
 }

@@ -73,7 +73,14 @@ rradar process any.txt --qr-file fixtures/qr/tw_einvoice_sample_01.payload.txt -
 | Engine | Status |
 |--------|--------|
 | `mock` (default) | Deterministic / fixtures; CI-safe |
-| `onnx` | Needs models under `models/` + future ORT link |
+| `onnx` | Real RapidOCR: build with `--features onnx`, fetch models + ORT (`tools/fetch-models.ps1 -FetchOrt`), then `--engine onnx` |
+
+```powershell
+powershell -File tools/fetch-models.ps1 -FetchOrt
+cargo run -p rradar-cli --features onnx -- process receipt.jpg --engine onnx --explain
+```
+
+See `models/README.md` for layout, `ORT_DYLIB_PATH`, and zh-TW notes.
 
 ## Categories
 
@@ -100,4 +107,5 @@ Ids: `food_dining`, `grocery_convenience`, `transport`, `shopping`, `health`, `u
 - [x] encrypted backup + sealed DB  
 - [x] QR prefer path  
 - [x] `scripts/smoke-cli.ps1`  
-- [ ] Real ONNX recognition (optional upgrade)  
+- [x] Real ONNX recognition path (`--features onnx` + models + ORT load-dynamic)  
+

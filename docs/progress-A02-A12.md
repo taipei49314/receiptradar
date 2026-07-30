@@ -11,7 +11,7 @@
 | A01 | Scaffold | Already present; extended |
 | A02 | `Money` + `Iso4217` exponent, `ReceiptDraft`, `ExplainTrace` | `crates/rradar-core/src/{money,types,explain}.rs` + unit tests |
 | A03 | `OcrEngine` trait + mock (+ onnx stub) | `crates/rradar-ocr` |
-| A04/A05 | Spike / real ONNX | **Deferred** — `OnnxOcrEngine` returns `OnnxUnavailable`; mock is CI default |
+| A04/A05 | Spike / real ONNX | **A05 runnable path landed** — feature `onnx` + paddle-ocr-rs + fetch scripts; mock remains CI default |
 | A06 | Preprocess + `process_*` orchestration | `preprocess.rs`, `pipeline.rs` |
 | A07 | TW e-invoice left QR parse (Appendix A shape) | `qr.rs` + 3 payload fixtures |
 | A08 | L1 extract (amount rank, date, merchant, invoice) | `extract.rs` |
@@ -53,7 +53,7 @@ CLI: `list`, `stats`, `export`, `backup create|restore`, `seal`, `process --conf
 
 | Item | Status |
 |------|--------|
-| A05 ONNX module | Path validation + engine select; inference runtime post-Green spike |
+| A05 ONNX module | Path validation + engine select; **inference via paddle-ocr-rs when `--features onnx` + models + ORT** |
 | A18 Flutter shell | `apps/mobile` onboarding/home/capture placeholder |
 | A19 FFI stub | `rradar-ffi` JSON helpers (FRB codegen later) |
 | Golden fixtures | `crates/rradar-core/tests/golden_fixtures.rs` |
@@ -62,7 +62,7 @@ CLI: `list`, `stats`, `export`, `backup create|restore`, `seal`, `process --conf
 ## Left
 
 1. **A04 device** measurements (fill `docs/spike-ocr-size.md`)  
-2. **A05** full ORT inference when models pinned  
+2. Pin `models/manifest.sha256` hashes after trusted fetch; optional CI job with models  
 3. **A19–A22** FRB + camera + flavors (needs Flutter/Android SDK)  
 4. **A24–A25** demo GIF + v0.1.0 release  
 5. SQLCipher P1 when Android NDK available
@@ -71,4 +71,4 @@ CLI: `list`, `stats`, `export`, `backup create|restore`, `seal`, `process --conf
 
 - Amount regex still noisy on unstructured lines; ranking prefers 合計/總計 so fixtures pass.
 - QR path sets merchant to `seller:{BAN}` until OCR/name dictionary fills display name.
-- ONNX engine is a deliberate stub until spike.
+- ONNX engine is feature-gated; default CI stays mock-only.

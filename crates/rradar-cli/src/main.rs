@@ -192,7 +192,18 @@ fn cmd_doctor(_args: &[String]) -> Result<(), String> {
             "not found — mock OCR is default"
         }
     );
-    println!("  engines:  mock (default), onnx (needs pinned models + ORT)");
+    let onnx_cfg = rradar_ocr::OnnxConfig::from_models_dir(&models);
+    for line in onnx_cfg.status_lines() {
+        println!("{line}");
+    }
+    println!(
+        "  engines:  mock (default), onnx{}",
+        if rradar_ocr::onnx_feature_enabled() {
+            " [feature ON]"
+        } else {
+            " [rebuild with --features onnx for inference]"
+        }
+    );
     println!("  privacy:  local-first; no network required for core path");
     Ok(())
 }
@@ -1331,7 +1342,7 @@ process options:
   --confirm, -c        Write to ledger (default db if --db omitted)
   --explain            Show rules / amount candidates
   --json               JSON output
-  --engine mock|onnx   OCR backend (default mock)
+  --engine mock|onnx   OCR backend (default mock; onnx needs --features onnx + models)
   --currency TWD|USD|… Default currency fallback
   --qr STR / --qr-file Path to TW e-invoice left QR
   --merchant --amount --category --date --notes

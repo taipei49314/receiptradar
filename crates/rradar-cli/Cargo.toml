@@ -12,6 +12,12 @@ repository.workspace = true
 name = "rradar"
 path = "src/main.rs"
 
+[features]
+default = []
+## Link real ONNX RapidOCR (paddle-ocr-rs + ORT load-dynamic).
+## Example: cargo run -p rradar-cli --features onnx -- process photo.jpg --engine onnx
+onnx = ["rradar-ocr/onnx"]
+
 [dependencies]
 rradar-core = { workspace = true }
 rradar-ocr = { workspace = true }

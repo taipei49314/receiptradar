@@ -9,6 +9,10 @@ publish = false
 name = "bench-ocr"
 path = "src/main.rs"
 
+[features]
+default = []
+onnx = ["rradar-ocr/onnx"]
+
 [dependencies]
 rradar-core = { path = "../../crates/rradar-core" }
 rradar-ocr = { path = "../../crates/rradar-ocr" }

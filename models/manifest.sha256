@@ -1,0 +1,6 @@
+# sha256  filename
+# Pin after a trusted download, then re-run tools/fetch-models.* to verify.
+# Example (placeholders — replace with real hashes from Get-FileHash / sha256sum):
+# <64-hex>  ch_PP-OCRv4_det_infer.onnx
+# <64-hex>  ch_PP-OCRv4_rec_infer.onnx
+# <64-hex>  ch_ppocr_mobile_v2.0_cls_infer.onnx

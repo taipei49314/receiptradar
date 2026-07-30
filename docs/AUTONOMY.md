@@ -63,13 +63,33 @@
 - Removed `rust-toolchain.toml` (forced MSVC, broke local GNU)
 - Push `c1c3986`
 
+## Cycle 11 — true ONNX runnable path (main axis #1)
+
+### Plan
+1. Feature-gate real RapidOCR: `rradar-ocr` / `rradar-cli` `--features onnx`
+2. Wire `paddle-ocr-rs` + `ort` **load-dynamic** (compiles on windows-gnu)
+3. Fetch scripts: `tools/fetch-models.ps1` (+ `-FetchOrt`) and improved `tools/fetch-models.sh`
+4. Clear errors without models / without feature; `rradar doctor` status lines
+5. Docs: `models/README.md`, `docs/cli.md`, README engines table
+
+### Verify
+- `cargo test --workspace` (default mock) green  
+- `cargo test -p rradar-ocr --features onnx` green  
+- `cargo clippy --workspace --all-targets -- -D warnings` green  
+
+### Result
+- Desktop can run `process --engine onnx` when models + ORT present and binary built with `--features onnx`
+- CI remains mock-only (no weights in git)
+
 ### Next seeds
 | Priority | Item |
 |----------|------|
-| P1 | Keep CI green |
-| P2 | ONNX / Flutter when unblocked |
+| P1 | Keep CI green; pin `manifest.sha256` after trusted download |
+| P2 | A04 device metrics in `spike-ocr-size.md` |
+| P3 | Mobile/FFI surface + demo fixtures matrix |
 
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
 - Green tests before re-plan  
 - Non-goals: official sync, GPT wrapper  
+
