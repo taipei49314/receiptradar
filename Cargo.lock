@@ -1485,6 +1485,7 @@ version = "0.1.0-alpha.0"
 dependencies = [
  "rradar-core",
  "rradar-ocr",
+ "serde",
  "serde_json",
 ]
 

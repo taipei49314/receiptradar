@@ -74,6 +74,15 @@ rradar help
 
 Details: [models/README.md](./models/README.md).
 
+## Mobile / FFI
+
+Rust mobile contract: [docs/ffi.md](./docs/ffi.md) · crate `rradar-ffi` (`staticlib`/`cdylib`).  
+Flutter shell: [apps/mobile](./apps/mobile) (mock `RradarApi` until FRB generate).
+
+```bash
+cargo test -p rradar-ffi
+```
+
 ## Develop
 
 ```bash

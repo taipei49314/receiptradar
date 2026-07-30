@@ -115,12 +115,28 @@
 - Local-first multi-device path is **backup file only**, with clear schema boundaries
 - Opening any ledger auto-migrates to v2
 
+## Cycle 14 — Mobile / FFI skeleton (main axis #3)
+
+### Plan
+1. Expand `rradar-ffi`: paths, capabilities, process bytes/QR, CRUD, stats/top, backup file
+2. Crate types `staticlib` + `cdylib` for future NDK link
+3. Dart `RradarApi` facade + Mock + bridge README; home shows core status
+4. `docs/ffi.md` contract map (no Flutter SDK → no FRB generate)
+
+### Verify
+- `cargo test --workspace` / `cargo test -p rradar-ffi` green
+- `cargo clippy --workspace --all-targets -- -D warnings` green
+
+### Result
+- Mobile closed-loop Rust API is callable from tests; UI can develop against Mock
+- FRB still deferred until Flutter is on the machine
+
 ### Next seeds
 | Priority | Item |
 |----------|------|
 | P1 | Keep CI green |
-| P2 | Mobile/FFI + Flutter when SDK present |
-| P3 | ONNX hash pin / release install polish |
+| P2 | FRB generate when Flutter present; Android NDK link |
+| P3 | Release/CI polish; ONNX hash pin |
 
 ## Rules
 - No questions between cycles unless secrets / destructive remote  

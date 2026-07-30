@@ -8,9 +8,16 @@ authors.workspace = true
 description = "FFI-facing API for ReceiptRadar mobile (FRB bindings later)"
 repository.workspace = true
 
+[lib]
+name = "rradar_ffi"
+path = "src/lib.rs"
+# `lib` for Rust tests; staticlib/cdylib for future Flutter/NDK linking.
+crate-type = ["lib", "staticlib", "cdylib"]
+
 [dependencies]
 rradar-core = { workspace = true }
 rradar-ocr = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
