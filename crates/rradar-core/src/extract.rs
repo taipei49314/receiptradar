@@ -75,14 +75,12 @@ pub fn extract_l1_fields(
                 continue;
             }
             // Date-only lines produce noisy digit matches
-            if re_iso_date().is_match(line) || re_roc_date().is_match(line) {
-                if !re_amount().is_match(line) || line.chars().filter(|c| c.is_ascii_digit()).count() <= 8
-                {
-                    // still allow "合計 2024" edge cases via total keyword only
-                    if !line_has_total_keyword(line) {
-                        continue;
-                    }
-                }
+            if (re_iso_date().is_match(line) || re_roc_date().is_match(line))
+                && (!re_amount().is_match(line)
+                    || line.chars().filter(|c| c.is_ascii_digit()).count() <= 8)
+                && !line_has_total_keyword(line)
+            {
+                continue;
             }
         }
         for caps in re_amount().captures_iter(line) {
@@ -125,7 +123,7 @@ pub fn extract_l1_fields(
             }
         }
     }
-    candidates.sort_by(|a, b| b.rank_score.cmp(&a.rank_score));
+    candidates.sort_by_key(|b| std::cmp::Reverse(b.rank_score));
     explain.amount_candidates = candidates.clone();
 
     let total = candidates.first().map(|c| {

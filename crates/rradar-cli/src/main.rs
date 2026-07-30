@@ -112,19 +112,14 @@ fn cmd_process(args: &[String]) -> Result<(), String> {
 
     if confirm {
         let db_path = db.ok_or("--confirm requires --db <path>")?;
-        let hash = rradar_core::preprocess::content_hash(
-            &std::fs::read(&path).unwrap_or_default(),
-        );
+        let hash = rradar_core::preprocess::content_hash(&std::fs::read(&path).unwrap_or_default());
         let (ledger, tmp) =
             open_ledger_auto(&db_path, passphrase.as_deref()).map_err(|e| e.to_string())?;
         let result = ledger
             .confirm_draft(&draft, Some(&hash), notes.as_deref(), force)
             .map_err(|e| e.to_string())?;
         if let Some(ref d) = result.dedupe {
-            eprintln!(
-                "dedupe {:?}: {} ({})",
-                d.level, d.message, d.existing_id
-            );
+            eprintln!("dedupe {:?}: {} ({})", d.level, d.message, d.existing_id);
         }
         if result.inserted {
             println!("confirmed id={}", result.transaction.id);
@@ -163,7 +158,10 @@ fn cmd_list(args: &[String]) -> Result<(), String> {
     let rows = ledger
         .list_transactions(limit, 0)
         .map_err(|e| e.to_string())?;
-    println!("{}", transactions_to_json(&rows).map_err(|e| e.to_string())?);
+    println!(
+        "{}",
+        transactions_to_json(&rows).map_err(|e| e.to_string())?
+    );
     if let Some(t) = tmp {
         let _ = std::fs::remove_file(t);
     }

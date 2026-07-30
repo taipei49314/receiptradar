@@ -37,8 +37,11 @@ jobs:
       - name: test
         run: cargo test --workspace
 
-      - name: cli version
-        run: cargo run -p rradar-cli -- version
+      - name: cli smoke
+        run: |
+          cargo run -p rradar-cli -- version
+          cargo run -p rradar-cli -- process fixtures/text/familymart_89.txt
+          cargo run -p bench-ocr -- fixtures/text
 
-  # Offline egress audit (PR-A23) will extend this job.
-  # For scaffold: document that offline builds must not phone home.
+      - name: network audit
+        run: python tools/network-audit/check_offline_deps.py

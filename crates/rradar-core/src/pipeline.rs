@@ -214,11 +214,7 @@ pub fn process_bytes(
         .merchant
         .unwrap_or_else(|| Field::new("unknown".into(), 0.2, FieldSource::Rule));
     let total = fields.total.unwrap_or_else(|| {
-        Field::new(
-            Money::new(0, opts.default_currency),
-            0.1,
-            FieldSource::Rule,
-        )
+        Field::new(Money::new(0, opts.default_currency), 0.1, FieldSource::Rule)
     });
     let transacted_at = fields
         .transacted_at
@@ -311,8 +307,10 @@ mod tests {
         let payload = format!("{inv}{date}{rand}{sales}{total}0000000012345678");
         let eng = MockOcrEngine;
         let cat = CategoryEngine::with_seed();
-        let mut opts = ProcessOptions::default();
-        opts.qr_payload = Some(payload);
+        let opts = ProcessOptions {
+            qr_payload: Some(payload),
+            ..Default::default()
+        };
         let draft = process_bytes(b"x", None, &eng, &cat, opts).unwrap();
         assert_eq!(draft.source_path, SourcePath::Qr);
         assert_eq!(draft.total.value.amount_minor, 8900);
@@ -323,8 +321,8 @@ mod tests {
     fn mock_engine_bytes() {
         let eng = MockOcrEngine;
         let cat = CategoryEngine::with_seed();
-        let draft = process_bytes(b"fake-jpeg", None, &eng, &cat, ProcessOptions::default())
-            .unwrap();
+        let draft =
+            process_bytes(b"fake-jpeg", None, &eng, &cat, ProcessOptions::default()).unwrap();
         // MockOcrEngine returns FAMILYMART + 合計 89
         assert_eq!(draft.total.value.amount_minor, 8900);
     }

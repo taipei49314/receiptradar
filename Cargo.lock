@@ -58,6 +58,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
+name = "bench-ocr"
+version = "0.1.0"
+dependencies = [
+ "rradar-core",
+ "rradar-ocr",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bitflags"
 version = "2.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -530,6 +540,15 @@ dependencies = [
  "thiserror",
  "ulid",
  "zeroize",
+]
+
+[[package]]
+name = "rradar-ffi"
+version = "0.1.0-alpha.0"
+dependencies = [
+ "rradar-core",
+ "rradar-ocr",
+ "serde_json",
 ]
 
 [[package]]

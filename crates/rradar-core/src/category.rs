@@ -30,10 +30,10 @@ pub struct CategoryEngine {
 
 impl CategoryEngine {
     pub fn with_seed() -> Self {
-        let mut eng = Self::default();
-        eng.merchants = seed_merchants();
-        eng.keywords = seed_keywords();
-        eng
+        Self {
+            merchants: seed_merchants(),
+            keywords: seed_keywords(),
+        }
     }
 
     pub fn categorize(
@@ -395,11 +395,7 @@ mod tests {
     #[test]
     fn seed_at_least_150() {
         let eng = CategoryEngine::with_seed();
-        assert!(
-            eng.merchant_count() >= 150,
-            "got {}",
-            eng.merchant_count()
-        );
+        assert!(eng.merchant_count() >= 150, "got {}", eng.merchant_count());
     }
 
     #[test]

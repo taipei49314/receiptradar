@@ -4,12 +4,14 @@ members = [
     "crates/rradar-core",
     "crates/rradar-cli",
     "crates/rradar-ocr",
+    "crates/rradar-ffi",
     "tools/bench-ocr",
 ]
 default-members = [
     "crates/rradar-core",
     "crates/rradar-cli",
     "crates/rradar-ocr",
+    "crates/rradar-ffi",
 ]
 
 [workspace.package]

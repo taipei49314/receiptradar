@@ -201,25 +201,22 @@ mod tests {
     fn reject_cross_currency_add() {
         let a = Money::new(100, Iso4217::TWD);
         let b = Money::new(100, Iso4217::USD);
-        assert!(matches!(a.checked_add(b), Err(MoneyError::CurrencyMismatch(_, _))));
+        assert!(matches!(
+            a.checked_add(b),
+            Err(MoneyError::CurrencyMismatch(_, _))
+        ));
     }
 
     #[test]
     fn sum_same_currency_ok() {
-        let items = [
-            Money::new(100, Iso4217::USD),
-            Money::new(250, Iso4217::USD),
-        ];
+        let items = [Money::new(100, Iso4217::USD), Money::new(250, Iso4217::USD)];
         let s = sum_same_currency(&items).unwrap().unwrap();
         assert_eq!(s.amount_minor, 350);
     }
 
     #[test]
     fn sum_mixed_currency_err() {
-        let items = [
-            Money::new(100, Iso4217::TWD),
-            Money::new(100, Iso4217::USD),
-        ];
+        let items = [Money::new(100, Iso4217::TWD), Money::new(100, Iso4217::USD)];
         assert!(sum_same_currency(&items).is_err());
     }
 }

@@ -87,7 +87,12 @@ pub fn blob_key(dek: &Dek, receipt_id: &str) -> Result<[u8; 32], CryptoError> {
     Ok(okm)
 }
 
-pub fn aead_encrypt(key: &[u8; 32], nonce: &[u8; 24], plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>, CryptoError> {
+pub fn aead_encrypt(
+    key: &[u8; 32],
+    nonce: &[u8; 24],
+    plaintext: &[u8],
+    aad: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
     let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
     let n = XNonce::from_slice(nonce);
     cipher
@@ -101,7 +106,12 @@ pub fn aead_encrypt(key: &[u8; 32], nonce: &[u8; 24], plaintext: &[u8], aad: &[u
         .map_err(|_| CryptoError::Aead)
 }
 
-pub fn aead_decrypt(key: &[u8; 32], nonce: &[u8; 24], ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>, CryptoError> {
+pub fn aead_decrypt(
+    key: &[u8; 32],
+    nonce: &[u8; 24],
+    ciphertext: &[u8],
+    aad: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
     let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
     let n = XNonce::from_slice(nonce);
     cipher

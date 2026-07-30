@@ -54,7 +54,11 @@ impl ExplainTrace {
             self.engine_id, self.source_path
         ));
         for s in &self.steps {
-            out.push_str(&format!("  [{kind}] {detail}\n", kind = s.kind, detail = s.detail));
+            out.push_str(&format!(
+                "  [{kind}] {detail}\n",
+                kind = s.kind,
+                detail = s.detail
+            ));
         }
         if !self.amount_candidates.is_empty() {
             out.push_str("amount candidates (best first):\n");
@@ -70,10 +74,7 @@ impl ExplainTrace {
             }
         }
         if !self.matched_keywords.is_empty() {
-            out.push_str(&format!(
-                "keywords: {}\n",
-                self.matched_keywords.join(", ")
-            ));
+            out.push_str(&format!("keywords: {}\n", self.matched_keywords.join(", ")));
         }
         out
     }

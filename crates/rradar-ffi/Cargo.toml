@@ -1,0 +1,16 @@
+[package]
+name = "rradar-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "FFI-facing API for ReceiptRadar mobile (FRB bindings later)"
+repository.workspace = true
+
+[dependencies]
+rradar-core = { workspace = true }
+rradar-ocr = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]

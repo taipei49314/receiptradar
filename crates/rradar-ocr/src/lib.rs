@@ -1,10 +1,14 @@
 //! OCR engine abstraction for ReceiptRadar.
 //!
-//! Mock backend is the CI default. ONNX RapidOCR is feature-gated for post-spike.
+//! Mock backend is the CI default. ONNX path: `onnx` module + optional models dir.
 
 #![deny(unsafe_code)]
 
+pub mod onnx;
+
 use serde::{Deserialize, Serialize};
+
+pub use onnx::{OnnxConfig, OnnxOcrEngine};
 
 /// One recognized text line.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -28,7 +32,7 @@ pub trait OcrEngine: Send + Sync {
 pub enum OcrError {
     #[error("empty image input")]
     EmptyInput,
-    #[error("onnx backend not enabled (build with real models after PR-A04/A05 spike)")]
+    #[error("onnx backend not enabled or models not ready (see PR-A04/A05)")]
     OnnxUnavailable,
     #[error("backend error: {0}")]
     Backend(String),
@@ -84,28 +88,21 @@ impl OcrEngine for MockOcrEngine {
     }
 }
 
-/// Placeholder ONNX engine — returns error until models are pinned (PR-A05).
-#[derive(Debug, Default, Clone, Copy)]
-pub struct OnnxOcrEngine;
-
-impl OcrEngine for OnnxOcrEngine {
-    fn name(&self) -> &'static str {
-        "onnx-rapidocr"
-    }
-
-    fn recognize(&self, image_bytes: &[u8]) -> Result<Vec<OcrLine>, OcrError> {
-        if image_bytes.is_empty() {
-            return Err(OcrError::EmptyInput);
-        }
-        Err(OcrError::OnnxUnavailable)
-    }
-}
-
-/// Select engine by name (`mock` default; `onnx` stubs unavailable).
+/// Select engine by name.
+///
+/// - `mock` — always available
+/// - `onnx` — loads `RRADAR_MODELS_DIR` or `./models` via [`OnnxOcrEngine`]
 pub fn engine_by_name(name: &str) -> Result<Box<dyn OcrEngine>, OcrError> {
     match name.to_ascii_lowercase().as_str() {
         "mock" | "" => Ok(Box::new(MockOcrEngine)),
-        "onnx" | "onnx-rapidocr" => Ok(Box::new(OnnxOcrEngine)),
+        "onnx" | "onnx-rapidocr" => {
+            let dir = std::env::var("RRADAR_MODELS_DIR").unwrap_or_else(|_| "models".into());
+            let cfg = OnnxConfig::from_models_dir(dir);
+            match OnnxOcrEngine::new(cfg.clone()) {
+                Ok(eng) => Ok(Box::new(eng)),
+                Err(_) => Ok(Box::new(OnnxOcrEngine::unvalidated(cfg))),
+            }
+        }
         other => Err(OcrError::Backend(format!("unknown engine: {other}"))),
     }
 }
@@ -137,8 +134,13 @@ mod tests {
     }
 
     #[test]
-    fn onnx_unavailable() {
-        let err = OnnxOcrEngine.recognize(b"x").unwrap_err();
-        assert!(matches!(err, OcrError::OnnxUnavailable));
+    fn onnx_engine_by_name_without_models() {
+        let eng = engine_by_name("onnx").unwrap();
+        assert_eq!(eng.name(), "onnx-rapidocr");
+        let err = eng.recognize(b"x").unwrap_err();
+        assert!(matches!(
+            err,
+            OcrError::OnnxUnavailable | OcrError::Backend(_)
+        ));
     }
 }

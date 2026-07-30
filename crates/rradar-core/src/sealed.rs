@@ -29,9 +29,8 @@ pub fn open_ledger_auto(
         .to_ascii_lowercase();
 
     if ext == "rrsealed" {
-        let pass = passphrase.ok_or_else(|| {
-            SealedError::Msg("sealed database requires --passphrase".into())
-        })?;
+        let pass = passphrase
+            .ok_or_else(|| SealedError::Msg("sealed database requires --passphrase".into()))?;
         let sealed = std::fs::read(path)?;
         let plain = unseal_bytes(pass, &sealed, ARGON2_M_KIB)?;
         let tmp = std::env::temp_dir().join(format!("rradar-open-{}.db", ulid::Ulid::new()));
@@ -44,7 +43,11 @@ pub fn open_ledger_auto(
 }
 
 /// Persist ledger to a sealed path (encrypts SQLite bytes).
-pub fn save_sealed(ledger: &Ledger, sealed_path: &Path, passphrase: &str) -> Result<(), SealedError> {
+pub fn save_sealed(
+    ledger: &Ledger,
+    sealed_path: &Path,
+    passphrase: &str,
+) -> Result<(), SealedError> {
     let bytes = ledger.export_sqlite_bytes()?;
     let sealed = seal_bytes(passphrase, &bytes, ARGON2_M_KIB)?;
     if let Some(parent) = sealed_path.parent() {
@@ -57,7 +60,11 @@ pub fn save_sealed(ledger: &Ledger, sealed_path: &Path, passphrase: &str) -> Res
 }
 
 /// Convert plaintext DB file → sealed file.
-pub fn seal_db_file(db_path: &Path, sealed_path: &Path, passphrase: &str) -> Result<(), SealedError> {
+pub fn seal_db_file(
+    db_path: &Path,
+    sealed_path: &Path,
+    passphrase: &str,
+) -> Result<(), SealedError> {
     let ledger = Ledger::open(db_path)?;
     save_sealed(&ledger, sealed_path, passphrase)
 }

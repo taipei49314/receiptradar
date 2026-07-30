@@ -134,7 +134,10 @@ pub fn create_backup(
     Ok(seal_backup(passphrase, &archive, m_kib)?)
 }
 
-pub fn create_backup_default_params(ledger: &Ledger, passphrase: &str) -> Result<Vec<u8>, ExportError> {
+pub fn create_backup_default_params(
+    ledger: &Ledger,
+    passphrase: &str,
+) -> Result<Vec<u8>, ExportError> {
     create_backup(ledger, passphrase, ARGON2_M_KIB)
 }
 

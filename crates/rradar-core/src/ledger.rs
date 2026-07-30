@@ -212,7 +212,11 @@ impl Ledger {
         // Hard: invoice_id + amount + currency + calendar day
         if let Some(ref inv) = draft.invoice_id {
             if !inv.value.is_empty() {
-                let day = draft.transacted_at.value.get(..10).unwrap_or(&draft.transacted_at.value);
+                let day = draft
+                    .transacted_at
+                    .value
+                    .get(..10)
+                    .unwrap_or(&draft.transacted_at.value);
                 let row: Option<(String,)> = self
                     .conn
                     .query_row(
@@ -235,8 +239,9 @@ impl Ledger {
                     return Ok(Some(DedupeWarning {
                         level: DedupeLevel::Hard,
                         existing_id: id,
-                        message: "duplicate invoice_id + amount + day; pass --force to insert again"
-                            .into(),
+                        message:
+                            "duplicate invoice_id + amount + day; pass --force to insert again"
+                                .into(),
                     }));
                 }
             }
@@ -281,7 +286,11 @@ impl Ledger {
             })
     }
 
-    pub fn list_transactions(&self, limit: usize, offset: usize) -> Result<Vec<Transaction>, LedgerError> {
+    pub fn list_transactions(
+        &self,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Transaction>, LedgerError> {
         let mut stmt = self.conn.prepare(
             r#"SELECT id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
                       category, invoice_id, source_path, overall_confidence, content_hash, notes
@@ -342,10 +351,8 @@ impl Ledger {
     pub fn export_sqlite_bytes(&self) -> Result<Vec<u8>, LedgerError> {
         if self.path == Path::new(":memory:") || self.path.as_os_str().is_empty() {
             let tmp = std::env::temp_dir().join(format!("rradar-dump-{}.db", ulid::Ulid::new()));
-            self.conn.execute(
-                "VACUUM INTO ?1",
-                params![tmp.to_string_lossy().as_ref()],
-            )?;
+            self.conn
+                .execute("VACUUM INTO ?1", params![tmp.to_string_lossy().as_ref()])?;
             let bytes = std::fs::read(&tmp)?;
             let _ = std::fs::remove_file(&tmp);
             return Ok(bytes);
@@ -476,9 +483,12 @@ mod tests {
     fn soft_dedupe_warns_but_inserts() {
         let db = Ledger::open_in_memory().unwrap();
         let d1 = sample_draft("tx1", None, 100);
-        db.confirm_draft(&d1, Some("samehash"), None, false).unwrap();
+        db.confirm_draft(&d1, Some("samehash"), None, false)
+            .unwrap();
         let d2 = sample_draft("tx2", None, 200);
-        let r = db.confirm_draft(&d2, Some("samehash"), None, false).unwrap();
+        let r = db
+            .confirm_draft(&d2, Some("samehash"), None, false)
+            .unwrap();
         assert!(r.inserted);
         assert_eq!(r.dedupe.unwrap().level, DedupeLevel::Soft);
         assert_eq!(db.count().unwrap(), 2);
