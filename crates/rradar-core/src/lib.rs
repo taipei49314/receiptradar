@@ -3,6 +3,7 @@
 #![deny(unsafe_code)]
 
 pub mod category;
+pub mod config;
 pub mod crypto;
 pub mod explain;
 pub mod export;
@@ -17,6 +18,7 @@ pub mod sealed;
 pub mod types;
 
 pub use category::CategoryEngine;
+pub use config::AppConfig;
 pub use explain::ExplainTrace;
 pub use export::{
     create_backup, create_backup_default_params, restore_backup, transactions_to_csv,

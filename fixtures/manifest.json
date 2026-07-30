@@ -6,7 +6,8 @@
     { "path": "text/starbucks_usd.txt", "class": "en_cafe", "expect_total_minor": 545, "expect_currency": "USD" },
     { "path": "text/mrt_taipei.txt", "class": "tw_transport", "expect_total_minor": 2500, "expect_currency": "TWD" },
     { "path": "text/kfc_tw.txt", "class": "tw_food", "expect_total_minor": 19900, "expect_currency": "TWD" },
-    { "path": "text/pxmart.txt", "class": "tw_grocery", "expect_total_minor": 35600, "expect_currency": "TWD" }
+    { "path": "text/pxmart.txt", "class": "tw_grocery", "expect_total_minor": 35600, "expect_currency": "TWD" },
+    { "path": "text/costco_tw.txt", "class": "tw_warehouse", "expect_total_minor": 128000, "expect_currency": "TWD" }
   ],
   "qr_fixtures": [
     { "path": "qr/tw_einvoice_sample_01.payload.txt", "expected": "qr/tw_einvoice_sample_01.expected.json" },

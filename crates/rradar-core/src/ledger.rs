@@ -558,7 +558,11 @@ impl Ledger {
                LIMIT ?2"#,
         )?;
         let rows = stmt.query_map(params![currency, limit as i64], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
         })?;
         let mut out = Vec::new();
         for r in rows {
@@ -809,7 +813,9 @@ mod tests {
         let top = db.top_merchants("TWD", 5).unwrap();
         assert_eq!(top[0].0, "店B");
         assert_eq!(top[0].1, 5000);
-        let range = db.stats_by_currency_range("2024-05-01", "2024-05-31").unwrap();
+        let range = db
+            .stats_by_currency_range("2024-05-01", "2024-05-31")
+            .unwrap();
         assert_eq!(range[0].total_minor, 1000);
         assert_eq!(db.clear_all().unwrap(), 2);
         assert_eq!(db.count().unwrap(), 0);

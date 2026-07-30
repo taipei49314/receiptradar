@@ -37,15 +37,18 @@
 4. Pushed `master` + tag **`v0.1.0-cli.1`**
 
 ## Cycle 7 — post-publish
+- Seeds, badge, repo URL
 
-- More merchant seeds, fixture pxmart, CI badge, correct repo URL
+## Cycle 8 — unattended resume
+- **CI red:** rustfmt — fixed via `cargo fmt`
+- `config.toml` load/save + `rradar config`
+- costco fixture; doctor shows config
 
 ### Next seeds
-| Priority | Item | Blocker |
-|----------|------|---------|
-| P2 | Watch GH Actions release | CI |
-| P2 | Real ONNX + models | weights |
-| P2 | Flutter FRB | SDK |
+| Priority | Item |
+|----------|------|
+| P1 | Keep CI green after each push |
+| P2 | ONNX / Flutter when unblocked |
 
 ## Rules
 - No questions between cycles unless secrets / destructive remote  

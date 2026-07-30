@@ -3,8 +3,8 @@
 use rradar_core::{
     apply_edits, create_backup, data_dir, default_db_path, ensure_data_dir, open_ledger_auto,
     process_path, restore_backup, save_sealed, transactions_to_csv, transactions_to_json,
-    write_restored_db, CategoryEngine, Iso4217, Money, ProcessOptions, ReceiptDraft, Transaction,
-    TxUpdate, UserEdits, PRODUCT_ID, VERSION,
+    write_restored_db, AppConfig, CategoryEngine, Iso4217, Money, ProcessOptions, ReceiptDraft,
+    Transaction, TxUpdate, UserEdits, PRODUCT_ID, VERSION,
 };
 use rradar_ocr::engine_by_name;
 use std::env;
@@ -31,6 +31,7 @@ fn main() -> ExitCode {
             Ok(())
         }
         "init" => cmd_init(&args[1..]),
+        "config" => cmd_config(&args[1..]),
         "doctor" => cmd_doctor(&args[1..]),
         "process" | "add" => cmd_process(&args[1..]),
         "manual" | "entry" => cmd_manual(&args[1..]),
@@ -109,18 +110,65 @@ fn cmd_init(_args: &[String]) -> Result<(), String> {
     let dir = ensure_data_dir().map_err(|e| e.to_string())?;
     let db = default_db_path();
     let _ledger = rradar_core::Ledger::open(&db).map_err(|e| e.to_string())?;
+    let cfg = AppConfig::default();
+    if !AppConfig::path().is_file() {
+        cfg.save().map_err(|e| e.to_string())?;
+    }
     println!("initialized");
-    println!("  home: {}", dir.display());
-    println!("  db:   {}", db.display());
+    println!("  home:   {}", dir.display());
+    println!("  db:     {}", db.display());
+    println!("  config: {}", AppConfig::path().display());
     println!("next: rradar process <receipt.txt|image> --confirm");
     Ok(())
 }
 
+fn cmd_config(args: &[String]) -> Result<(), String> {
+    if args.is_empty() || args[0] == "show" {
+        let c = AppConfig::load();
+        println!("path | {}", AppConfig::path().display());
+        println!("default_currency | {}", c.default_currency);
+        println!("list_limit | {}", c.list_limit);
+        return Ok(());
+    }
+    if args[0] == "set" {
+        let mut c = AppConfig::load();
+        let mut i = 1;
+        while i < args.len() {
+            match args[i].as_str() {
+                "default_currency" | "--currency" => {
+                    i += 1;
+                    let v = args.get(i).ok_or("needs currency code")?.clone();
+                    Iso4217::parse(&v).ok_or_else(|| format!("bad currency {v}"))?;
+                    c.default_currency = v.to_uppercase();
+                }
+                "list_limit" | "--list-limit" => {
+                    i += 1;
+                    c.list_limit = args
+                        .get(i)
+                        .ok_or("needs number")?
+                        .parse()
+                        .map_err(|_| "bad list_limit")?;
+                }
+                other => return Err(format!("unknown config key `{other}`")),
+            }
+            i += 1;
+        }
+        let _ = ensure_data_dir();
+        c.save().map_err(|e| e.to_string())?;
+        println!("saved | {}", AppConfig::path().display());
+        return Ok(());
+    }
+    Err("usage: rradar config [show|set default_currency TWD|set list_limit 50]".into())
+}
+
 fn cmd_doctor(_args: &[String]) -> Result<(), String> {
+    let cfg = AppConfig::load();
     println!("receiptradar doctor");
     println!("  version:  {VERSION}");
     println!("  home:     {}", data_dir().display());
     println!("  db:       {}", default_db_path().display());
+    println!("  config:   {}", AppConfig::path().display());
+    println!("  currency: {}", cfg.default_currency);
     let db = default_db_path();
     if db.is_file() {
         match rradar_core::Ledger::open(&db) {
@@ -423,7 +471,9 @@ fn cmd_import(args: &[String]) -> Result<(), String> {
     let flags = extract_db_from_all(args)?;
     let _ = ensure_data_dir();
     let (ledger, tmp) = open_db(&flags)?;
-    let (ins, skip) = ledger.import_transactions(&rows).map_err(|e| e.to_string())?;
+    let (ins, skip) = ledger
+        .import_transactions(&rows)
+        .map_err(|e| e.to_string())?;
     println!("import | inserted={ins} skipped={skip}");
     maybe_reseal(&flags, &ledger, tmp)?;
     Ok(())
@@ -431,7 +481,7 @@ fn cmd_import(args: &[String]) -> Result<(), String> {
 
 fn cmd_list(args: &[String]) -> Result<(), String> {
     let mut json = false;
-    let mut limit = 50usize;
+    let mut limit = AppConfig::load().list_limit;
     let mut offset = 0usize;
     let mut currency: Option<String> = None;
     let mut query: Option<String> = None;
@@ -740,8 +790,8 @@ fn cmd_top(args: &[String]) -> Result<(), String> {
     } else {
         println!("rank | merchant | total | count | currency={currency}");
         for (i, (m, minor, cnt)) in rows.iter().enumerate() {
-            let major =
-                Money::new(*minor, Iso4217::parse(&currency).unwrap_or(Iso4217::TWD)).display_major();
+            let major = Money::new(*minor, Iso4217::parse(&currency).unwrap_or(Iso4217::TWD))
+                .display_major();
             println!("{:>4} | {m} | {major} | {cnt}", i + 1);
         }
     }
@@ -1045,10 +1095,12 @@ fn print_table(rows: &[Transaction]) {
 }
 
 fn default_currency_from_env() -> Iso4217 {
-    std::env::var("RRADAR_DEFAULT_CURRENCY")
-        .ok()
-        .and_then(|s| Iso4217::parse(&s))
-        .unwrap_or(Iso4217::TWD)
+    if let Ok(s) = std::env::var("RRADAR_DEFAULT_CURRENCY") {
+        if let Some(c) = Iso4217::parse(&s) {
+            return c;
+        }
+    }
+    AppConfig::load().currency()
 }
 
 fn print_topic_help(topic: &str) -> Result<(), String> {
@@ -1094,11 +1146,12 @@ backup restore --in file -p PASS [--db PATH]
 seal [--db ledger.db] -o file.rrsealed -p PASS
 unseal --in file.rrsealed -o ledger.db -p PASS
   Whole-file at-rest encryption (P2).",
-        "init" | "doctor" | "path" => "\
-init     create data dir + empty ledger
+        "init" | "doctor" | "path" | "config" => "\
+init     create data dir + empty ledger + default config.toml
+config [show|set default_currency TWD|set list_limit 50]
 doctor   health check
 path     print home + db paths
-  RRADAR_HOME / RRADAR_DB override defaults.",
+  RRADAR_HOME / RRADAR_DB / RRADAR_DEFAULT_CURRENCY override defaults.",
         "edit" | "delete" | "show" | "rm" => "\
 show <id>
 edit <id> [--merchant --amount --currency --category --notes --date]
@@ -1128,7 +1181,8 @@ Quick start:
   rradar export csv -o out.csv
 
 Commands:
-  init                 Create data dir + empty ledger
+  init                 Create data dir + empty ledger + config
+  config               Show/set local config.toml
   doctor               Environment / db check
   path                 Print default home & db paths
   process <files…>     Parse receipt(s) (alias: add); batch OK

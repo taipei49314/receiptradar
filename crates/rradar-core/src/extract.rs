@@ -180,9 +180,11 @@ pub fn extract_l1_fields(
 fn line_has_total_keyword(line: &str) -> bool {
     let u = line.to_uppercase();
     // Chinese / shared
-    if ["合計", "總計", "總額", "應收", "應付", "實付", "刷卡", "應稅", "付款"]
-        .iter()
-        .any(|k| line.contains(k))
+    if [
+        "合計", "總計", "總額", "應收", "應付", "實付", "刷卡", "應稅", "付款",
+    ]
+    .iter()
+    .any(|k| line.contains(k))
     {
         return true;
     }
