@@ -1,9 +1,21 @@
-//! ReceiptRadar core library.
-//!
-//! Local-first receipt → ledger types and orchestration stubs.
-//! Real OCR, extractors, and SQLite land in later Track A PRs.
+//! ReceiptRadar core library — local-first receipt → draft pipeline.
 
 #![deny(unsafe_code)]
+
+pub mod category;
+pub mod explain;
+pub mod extract;
+pub mod money;
+pub mod pipeline;
+pub mod preprocess;
+pub mod qr;
+pub mod types;
+
+pub use category::CategoryEngine;
+pub use explain::ExplainTrace;
+pub use money::{sum_same_currency, Iso4217, Money, MoneyError};
+pub use pipeline::{process_bytes, process_path, ProcessError, ProcessOptions};
+pub use types::{Field, FieldSource, ReceiptDraft, SourcePath, TextBlock};
 
 /// Crate version (workspace package version).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -1,13 +1,27 @@
-# Fixtures (placeholder)
+# Fixtures
 
-Golden fixtures and the receipt-class matrix land in **PR-A11**.
-
-## Policy preview (from design)
+## Policy (PII)
 
 1. Prefer team-captured receipts with written consent.
 2. Redact membership / phone / personal QR when not required for the class.
-3. Day-to-day CI may use **synthetic** rasterized layouts.
-4. Release sign-off uses ≥30 real (or sufficiently redacted) images under this policy.
-5. Do not require community issue attachments of live personal receipts.
+3. Day-to-day CI uses **synthetic text** and **synthetic QR payloads** (no personal data).
+4. Release sign-off (≥30 real photos) is a later gate under this policy — not required for A12.
+5. Do not attach live personal receipts to public issues without scrubbing.
 
-See the design document section on fixture PII and metrics (a) text-only vs (b) pixel e2e.
+## Layout
+
+| Path | Purpose |
+|------|---------|
+| `text/*.txt` | Metric (a): extract/category given perfect OCR text |
+| `qr/*.payload.txt` | Appendix A left-QR structural decode samples |
+| `manifest.json` | Index for golden runners |
+
+## CLI
+
+```bash
+rradar process fixtures/text/familymart_89.txt --explain
+rradar process fixtures/text/familymart_89.txt --json
+# QR prefer (PowerShell):
+$q = Get-Content -Raw fixtures/qr/tw_einvoice_sample_01.payload.txt
+rradar process fixtures/text/familymart_89.txt --qr $q --explain
+```

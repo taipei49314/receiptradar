@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "ReceiptRadar CLI (rradar) — developer wow path and CI gate"
+description = "ReceiptRadar CLI (rradar) — process receipts locally"
 repository.workspace = true
 
 [[bin]]
@@ -14,6 +14,8 @@ path = "src/main.rs"
 
 [dependencies]
 rradar-core = { workspace = true }
+rradar-ocr = { workspace = true }
 anyhow = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]

@@ -1,0 +1,6 @@
+{
+  "invoiceId": "AB12345678",
+  "transactedAt": { "value": "2024-01-01", "source": "qr" },
+  "total": { "amount_minor": 8900, "currency": "TWD", "exponent": 2, "source": "qr" },
+  "sourcePath": "qr"
+}

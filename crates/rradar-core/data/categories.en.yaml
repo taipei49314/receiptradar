@@ -1,0 +1,19 @@
+schema_version: 1
+locale: en
+categories:
+  - id: food_dining
+    label: Food & dining
+  - id: grocery_convenience
+    label: Grocery & convenience
+  - id: transport
+    label: Transport
+  - id: shopping
+    label: Shopping
+  - id: health
+    label: Health
+  - id: utilities
+    label: Utilities & housing
+  - id: entertainment
+    label: Entertainment
+  - id: other
+    label: Other

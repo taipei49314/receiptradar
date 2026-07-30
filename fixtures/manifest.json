@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "note": "Text fixtures for metric (a) extract-given-text; QR payloads for Appendix A. Real pixel e2e matrix is PR-A11 release gate under PII policy.",
+  "text_fixtures": [
+    { "path": "text/familymart_89.txt", "class": "tw_convenience", "expect_total_minor": 8900, "expect_currency": "TWD" },
+    { "path": "text/starbucks_usd.txt", "class": "en_cafe", "expect_total_minor": 545, "expect_currency": "USD" }
+  ],
+  "qr_fixtures": [
+    { "path": "qr/tw_einvoice_sample_01.payload.txt", "expected": "qr/tw_einvoice_sample_01.expected.json" },
+    { "path": "qr/tw_einvoice_sample_02.payload.txt" },
+    { "path": "qr/tw_einvoice_sample_03.payload.txt" }
+  ]
+}

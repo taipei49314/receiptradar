@@ -1,0 +1,19 @@
+schema_version: 1
+locale: zh-TW
+categories:
+  - id: food_dining
+    label: 餐飲
+  - id: grocery_convenience
+    label: 超商／超市
+  - id: transport
+    label: 交通
+  - id: shopping
+    label: 購物
+  - id: health
+    label: 健康／藥妝
+  - id: utilities
+    label: 居家／帳單
+  - id: entertainment
+    label: 娛樂
+  - id: other
+    label: 其他

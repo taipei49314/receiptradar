@@ -37,10 +37,11 @@ Requirements: Rust **1.78+** (`rustup`).
 ```bash
 cargo test --workspace
 cargo run -p rradar-cli -- version
-cargo run -p rradar-cli -- help
+cargo run -p rradar-cli -- process fixtures/text/familymart_89.txt --explain
+cargo run -p rradar-cli -- process fixtures/text/starbucks_usd.txt --currency USD --json
 ```
 
-`rradar process` lands after the OCR spike and pipeline PRs (see design doc).
+Default OCR engine is **mock** (CI-friendly). Real ONNX is stubbed until the device spike (PR-A04/A05). Progress: [docs/progress-A02-A12.md](./docs/progress-A02-A12.md).
 
 ## Architecture (target)
 
