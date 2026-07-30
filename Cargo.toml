@@ -4,6 +4,7 @@ members = [
     "crates/rradar-core",
     "crates/rradar-cli",
     "crates/rradar-ocr",
+    "tools/bench-ocr",
 ]
 default-members = [
     "crates/rradar-core",
