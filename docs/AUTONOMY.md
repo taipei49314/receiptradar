@@ -40,14 +40,17 @@
 - Seeds, badge, repo URL
 
 ## Cycle 8 — unattended resume
-- **CI red:** rustfmt — fixed via `cargo fmt`
-- `config.toml` load/save + `rradar config`
-- costco fixture; doctor shows config
+- rustfmt CI fix; config.toml; costco + amount 1280 fix; count
+
+## Cycle 10 — last/undo/recategorize
+- `last`, `undo --yes`, `recategorize`, `list --year/--month`
+- Removed `rust-toolchain.toml` (forced MSVC, broke local GNU)
+- Push `c1c3986`
 
 ### Next seeds
 | Priority | Item |
 |----------|------|
-| P1 | Keep CI green after each push |
+| P1 | Keep CI green |
 | P2 | ONNX / Flutter when unblocked |
 
 ## Rules

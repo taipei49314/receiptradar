@@ -39,8 +39,11 @@ rradar process receipt.txt --confirm \
 
 # 3) Browse
 rradar list
+rradar list --year 2024 --month 5
 rradar list --query 全家 --currency TWD
+rradar last
 rradar show <id>
+rradar count
 rradar stats              # this calendar month, per currency
 rradar stats --all
 rradar stats --from 2024-01-01 --to 2024-12-31
@@ -48,7 +51,10 @@ rradar top --currency TWD --limit 10
 
 # 4) Fix mistakes
 rradar edit <id> --amount 99 --notes "招待客戶"
+rradar undo --yes         # remove last confirmed
 rradar delete <id> --yes
+rradar recategorize       # only category=other
+rradar config set default_currency TWD
 
 # 5) Export / backup
 rradar export csv -o month.csv

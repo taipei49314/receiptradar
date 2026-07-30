@@ -932,10 +932,12 @@ fn cmd_categories() -> Result<(), String> {
 
 fn cmd_export(args: &[String]) -> Result<(), String> {
     if args.is_empty() {
-        return Err("usage: rradar export <csv|json> [-o file]".into());
+        return Err("usage: rradar export <csv|json> [-o file] [--year Y --month M]".into());
     }
     let kind = args[0].as_str();
     let mut out: Option<PathBuf> = None;
+    let mut year: Option<i32> = None;
+    let mut month: Option<u32> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -943,13 +945,37 @@ fn cmd_export(args: &[String]) -> Result<(), String> {
                 i += 1;
                 out = Some(PathBuf::from(args.get(i).ok_or("-o needs value")?));
             }
+            "--year" => {
+                i += 1;
+                year = Some(
+                    args.get(i)
+                        .ok_or("needs year")?
+                        .parse()
+                        .map_err(|_| "bad year")?,
+                );
+            }
+            "--month" => {
+                i += 1;
+                month = Some(
+                    args.get(i)
+                        .ok_or("needs month")?
+                        .parse()
+                        .map_err(|_| "bad month")?,
+                );
+            }
             _ => {}
         }
         i += 1;
     }
     let flags = extract_db_from_all(args)?;
     let (ledger, tmp) = open_db(&flags)?;
-    let rows = ledger.export_all().map_err(|e| e.to_string())?;
+    let rows = if let (Some(y), Some(m)) = (year, month) {
+        ledger
+            .list_by_month(y, m, 100_000)
+            .map_err(|e| e.to_string())?
+    } else {
+        ledger.export_all().map_err(|e| e.to_string())?
+    };
     let body = match kind {
         "csv" => transactions_to_csv(&rows).map_err(|e| e.to_string())?,
         "json" => transactions_to_json(&rows).map_err(|e| e.to_string())?,
@@ -957,7 +983,7 @@ fn cmd_export(args: &[String]) -> Result<(), String> {
     };
     if let Some(p) = out {
         std::fs::write(&p, body.as_bytes()).map_err(|e| e.to_string())?;
-        println!("wrote\t{}", p.display());
+        println!("wrote | {} | rows={}", p.display(), rows.len());
     } else {
         print!("{body}");
     }
