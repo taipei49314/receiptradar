@@ -576,6 +576,68 @@ impl Ledger {
         Ok(n)
     }
 
+    /// Most recently confirmed transaction (by confirmed_at, then id).
+    pub fn last_transaction(&self) -> Result<Option<Transaction>, LedgerError> {
+        let row = self
+            .conn
+            .query_row(
+                r#"SELECT id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
+                          category, invoice_id, source_path, overall_confidence, content_hash, notes
+                   FROM transactions
+                   ORDER BY confirmed_at DESC, id DESC
+                   LIMIT 1"#,
+                [],
+                row_to_tx,
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    pub fn list_by_month(
+        &self,
+        year: i32,
+        month: u32,
+        limit: usize,
+    ) -> Result<Vec<Transaction>, LedgerError> {
+        let prefix = format!("{year:04}-{month:02}");
+        let mut stmt = self.conn.prepare(
+            r#"SELECT id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
+                      category, invoice_id, source_path, overall_confidence, content_hash, notes
+               FROM transactions
+               WHERE substr(transacted_at,1,7) = ?1
+               ORDER BY transacted_at DESC, confirmed_at DESC
+               LIMIT ?2"#,
+        )?;
+        let rows = stmt.query_map(params![prefix, limit as i64], row_to_tx)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Re-apply category engine to all rows (or only `other`). Returns updated count.
+    pub fn recategorize_all(
+        &self,
+        engine: &crate::category::CategoryEngine,
+        only_other: bool,
+    ) -> Result<usize, LedgerError> {
+        let rows = self.export_all()?;
+        let mut n = 0usize;
+        for mut tx in rows {
+            if only_other && tx.category != crate::category::CAT_OTHER {
+                continue;
+            }
+            let mut ex = crate::explain::ExplainTrace::new("recategorize", "rule");
+            let field = engine.categorize(&tx.merchant, tx.notes.as_deref().unwrap_or(""), &mut ex);
+            if field.value != tx.category {
+                tx.category = field.value;
+                self.conn.execute(
+                    "UPDATE transactions SET category = ?2 WHERE id = ?1",
+                    params![tx.id, tx.category],
+                )?;
+                n += 1;
+            }
+        }
+        Ok(n)
+    }
+
     /// All-time per-currency totals (no cross-currency sum).
     pub fn stats_by_currency_all(&self) -> Result<Vec<CurrencyMonthStat>, LedgerError> {
         let mut stmt = self.conn.prepare(
@@ -819,5 +881,16 @@ mod tests {
         assert_eq!(range[0].total_minor, 1000);
         assert_eq!(db.clear_all().unwrap(), 2);
         assert_eq!(db.count().unwrap(), 0);
+    }
+
+    #[test]
+    fn last_and_month_list() {
+        let db = Ledger::open_in_memory().unwrap();
+        db.confirm_draft(&sample_draft("x1", None, 100), None, None, false)
+            .unwrap();
+        let last = db.last_transaction().unwrap().unwrap();
+        assert_eq!(last.id, "x1");
+        let m = db.list_by_month(2024, 5, 10).unwrap();
+        assert_eq!(m.len(), 1);
     }
 }

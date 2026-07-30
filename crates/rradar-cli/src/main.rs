@@ -38,11 +38,13 @@ fn main() -> ExitCode {
         "import" => cmd_import(&args[1..]),
         "list" | "ls" | "search" => cmd_list(&args[1..]),
         "count" => cmd_count(&args[1..]),
+        "last" | "undo" => cmd_last_or_undo(&args[0], &args[1..]),
         "show" => cmd_show(&args[1..]),
         "delete" | "rm" => cmd_delete(&args[1..]),
         "edit" => cmd_edit(&args[1..]),
         "stats" => cmd_stats(&args[1..]),
         "top" => cmd_top(&args[1..]),
+        "recategorize" => cmd_recategorize(&args[1..]),
         "clear" => cmd_clear(&args[1..]),
         "categories" | "cats" => cmd_categories(),
         "export" => cmd_export(&args[1..]),
@@ -486,6 +488,8 @@ fn cmd_list(args: &[String]) -> Result<(), String> {
     let mut offset = 0usize;
     let mut currency: Option<String> = None;
     let mut query: Option<String> = None;
+    let mut year: Option<i32> = None;
+    let mut month: Option<u32> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -514,6 +518,24 @@ fn cmd_list(args: &[String]) -> Result<(), String> {
                 i += 1;
                 query = Some(args.get(i).ok_or("--query needs value")?.clone());
             }
+            "--year" => {
+                i += 1;
+                year = Some(
+                    args.get(i)
+                        .ok_or("needs year")?
+                        .parse()
+                        .map_err(|_| "bad year")?,
+                );
+            }
+            "--month" => {
+                i += 1;
+                month = Some(
+                    args.get(i)
+                        .ok_or("needs month")?
+                        .parse()
+                        .map_err(|_| "bad month")?,
+                );
+            }
             _ => {}
         }
         i += 1;
@@ -521,9 +543,15 @@ fn cmd_list(args: &[String]) -> Result<(), String> {
     let flags = extract_db_from_all(args)?;
 
     let (ledger, tmp) = open_db(&flags)?;
-    let rows = ledger
-        .list_filtered(limit, offset, currency.as_deref(), query.as_deref())
-        .map_err(|e| e.to_string())?;
+    let rows = if let (Some(y), Some(m)) = (year, month) {
+        ledger
+            .list_by_month(y, m, limit)
+            .map_err(|e| e.to_string())?
+    } else {
+        ledger
+            .list_filtered(limit, offset, currency.as_deref(), query.as_deref())
+            .map_err(|e| e.to_string())?
+    };
     if json {
         println!(
             "{}",
@@ -536,6 +564,63 @@ fn cmd_list(args: &[String]) -> Result<(), String> {
     if let Some(t) = tmp {
         let _ = std::fs::remove_file(t);
     }
+    Ok(())
+}
+
+fn cmd_last_or_undo(cmd: &str, args: &[String]) -> Result<(), String> {
+    let flags = extract_db_from_all(args)?;
+    let (ledger, tmp) = open_db(&flags)?;
+    let last = ledger
+        .last_transaction()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "ledger is empty".to_string())?;
+    if cmd == "last" {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&last).unwrap_or_default()
+        );
+        if let Some(t) = tmp {
+            let _ = std::fs::remove_file(t);
+        }
+        return Ok(());
+    }
+    let yes = args.iter().any(|a| a == "--yes" || a == "-y");
+    if !yes {
+        println!(
+            "would undo | {} | {} | {} {}",
+            last.id,
+            last.merchant,
+            last.currency,
+            Money::new(
+                last.amount_minor,
+                Iso4217::parse(&last.currency).unwrap_or(Iso4217::TWD)
+            )
+            .display_major()
+        );
+        return Err("refusing to undo without --yes (re-run: rradar undo --yes)".into());
+    }
+    ledger
+        .delete_transaction(&last.id)
+        .map_err(|e| e.to_string())?;
+    println!("undone | {}", last.id);
+    maybe_reseal(&flags, &ledger, tmp)?;
+    Ok(())
+}
+
+fn cmd_recategorize(args: &[String]) -> Result<(), String> {
+    let only_other = !args.iter().any(|a| a == "--all");
+    let flags = extract_db_from_all(args)?;
+    let (ledger, tmp) = open_db(&flags)?;
+    let eng = CategoryEngine::with_seed();
+    let n = ledger
+        .recategorize_all(&eng, only_other)
+        .map_err(|e| e.to_string())?;
+    println!(
+        "recategorized | {} rows (scope={})",
+        n,
+        if only_other { "other-only" } else { "all" }
+    );
+    maybe_reseal(&flags, &ledger, tmp)?;
     Ok(())
 }
 
@@ -1202,11 +1287,14 @@ Commands:
   import json <file>   Import transactions JSON array
   list                 List transactions (alias: ls, search)
   count                Transaction count
+  last                 Show most recently confirmed row (JSON)
+  undo --yes           Delete most recently confirmed row
   show <id>            Show one transaction (JSON)
   edit <id>            Edit merchant/amount/category/notes/date
   delete <id> --yes    Delete transaction (alias: rm)
   stats                Per-currency totals (default: this month)
   top                  Top merchants by spend (one currency)
+  recategorize         Re-run category rules (default: only `other`)
   clear --yes          Wipe all transactions
   categories           List category ids
   export csv|json      Export ledger
