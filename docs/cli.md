@@ -83,10 +83,13 @@ Ids: `food_dining`, `grocery_convenience`, `transport`, `shopping`, `health`, `u
 ## Completeness (CLI product)
 
 - [x] init / doctor / default paths  
-- [x] process + confirm + field overrides  
+- [x] process + confirm + field overrides (+ **batch paths**)  
+- [x] **manual** entry without OCR  
+- [x] **import json**  
 - [x] list / show / edit / delete  
 - [x] stats (month + all), no cross-currency sum  
 - [x] export CSV (UTF-8 BOM) / JSON  
 - [x] encrypted backup + sealed DB  
 - [x] QR prefer path  
+- [x] `scripts/smoke-cli.ps1`  
 - [ ] Real ONNX recognition (optional upgrade)  

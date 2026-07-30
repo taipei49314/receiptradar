@@ -29,7 +29,9 @@ fn main() -> ExitCode {
         "init" => cmd_init(&args[1..]),
         "doctor" => cmd_doctor(&args[1..]),
         "process" | "add" => cmd_process(&args[1..]),
-        "list" | "ls" => cmd_list(&args[1..]),
+        "manual" | "entry" => cmd_manual(&args[1..]),
+        "import" => cmd_import(&args[1..]),
+        "list" | "ls" | "search" => cmd_list(&args[1..]),
         "show" => cmd_show(&args[1..]),
         "delete" | "rm" => cmd_delete(&args[1..]),
         "edit" => cmd_edit(&args[1..]),
@@ -40,8 +42,8 @@ fn main() -> ExitCode {
         "seal" => cmd_seal(&args[1..]),
         "unseal" => cmd_unseal(&args[1..]),
         "path" => {
-            println!("home\t{}", data_dir().display());
-            println!("db\t{}", default_db_path().display());
+            println!("home | {}", data_dir().display());
+            println!("db   | {}", default_db_path().display());
             Ok(())
         }
         other => Err(format!("unknown command `{other}` — try `rradar help`")),
@@ -139,7 +141,7 @@ fn cmd_doctor(_args: &[String]) -> Result<(), String> {
 }
 
 fn cmd_process(args: &[String]) -> Result<(), String> {
-    let mut path: Option<PathBuf> = None;
+    let mut paths: Vec<PathBuf> = Vec::new();
     let mut explain = false;
     let mut engine = "mock".to_string();
     let mut qr: Option<String> = None;
@@ -216,91 +218,207 @@ fn cmd_process(args: &[String]) -> Result<(), String> {
                 date = Some(args.get(i).ok_or("--date needs value")?.clone());
             }
             s if s.starts_with('-') => return Err(format!("unknown flag: {s}")),
-            s => {
-                if path.is_some() {
-                    return Err("multiple input paths".into());
-                }
-                path = Some(PathBuf::from(s));
-            }
+            s => paths.push(PathBuf::from(s)),
         }
         i += 1;
     }
 
-    let path = path.ok_or(
-        "usage: rradar process <path> [--confirm] [--explain] [--merchant …] [--amount 89.00]",
-    )?;
+    if paths.is_empty() {
+        return Err(
+            "usage: rradar process <path> [more paths…] [--confirm] [--explain] [--amount 89]"
+                .into(),
+        );
+    }
+
     let eng = engine_by_name(&engine).map_err(|e| e.to_string())?;
     let categories = CategoryEngine::with_seed();
-    let opts = ProcessOptions {
+    let opts_base = ProcessOptions {
         default_currency: currency,
         qr_payload: qr,
         ..Default::default()
     };
 
-    let mut draft =
-        process_path(&path, eng.as_ref(), &categories, opts).map_err(|e| e.to_string())?;
-
-    // User overrides before display / confirm
-    let mut edits = UserEdits {
-        merchant,
-        notes: notes.clone(),
-        category,
-        transacted_at: date,
-        ..Default::default()
+    let db_path = db.unwrap_or_else(default_db_path);
+    let flags = DbFlags {
+        db: db_path,
+        passphrase,
     };
-    if let Some(ref a) = amount_major {
-        let m = Money::from_major_str(a, currency).map_err(|e| e.to_string())?;
-        edits.amount_minor = Some(m.amount_minor);
-        edits.currency = Some(currency.to_string());
-    }
-    apply_edits(&mut draft, &edits);
-    // re-categorize if merchant override and no explicit category
-    if edits.merchant.is_some() && edits.category.is_none() {
-        let mut ex = draft.explain.clone();
-        draft.category = categories.categorize(&draft.merchant.value, &draft.raw_text, &mut ex);
-        draft.explain = ex;
-    }
-
-    if !quiet {
-        print_draft(&draft, explain, json && !confirm);
-    } else if json && !confirm {
-        print_draft(&draft, false, true);
-    }
-
-    if confirm {
-        let db_path = db.unwrap_or_else(default_db_path);
+    let mut ledger_open = if confirm {
         let _ = ensure_data_dir();
-        if let Some(parent) = db_path.parent() {
+        if let Some(parent) = flags.db.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let hash = rradar_core::preprocess::content_hash(&std::fs::read(&path).unwrap_or_default());
-        let flags = DbFlags {
-            db: db_path,
-            passphrase,
+        Some(open_db(&flags)?)
+    } else {
+        None
+    };
+
+    let mut confirmed_n = 0usize;
+    for path in &paths {
+        let mut draft = process_path(path, eng.as_ref(), &categories, opts_base.clone())
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+
+        let mut edits = UserEdits {
+            merchant: merchant.clone(),
+            notes: notes.clone(),
+            category: category.clone(),
+            transacted_at: date.clone(),
+            ..Default::default()
         };
-        let (ledger, tmp) = open_db(&flags)?;
-        let result = ledger
-            .confirm_draft(&draft, Some(&hash), notes.as_deref(), force)
-            .map_err(|e| e.to_string())?;
-        if let Some(ref d) = result.dedupe {
-            eprintln!("dedupe {:?}: {} ({})", d.level, d.message, d.existing_id);
+        if let Some(ref a) = amount_major {
+            let m = Money::from_major_str(a, currency).map_err(|e| e.to_string())?;
+            edits.amount_minor = Some(m.amount_minor);
+            edits.currency = Some(currency.to_string());
         }
-        if result.inserted {
-            println!("confirmed\t{}", result.transaction.id);
-        } else {
-            println!(
-                "skipped\t{}\t(hard dedupe; use --force)",
-                result.transaction.id
-            );
+        apply_edits(&mut draft, &edits);
+        if edits.merchant.is_some() && edits.category.is_none() {
+            let mut ex = draft.explain.clone();
+            draft.category = categories.categorize(&draft.merchant.value, &draft.raw_text, &mut ex);
+            draft.explain = ex;
         }
-        maybe_reseal(&flags, &ledger, tmp)?;
-        if json {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&result).unwrap_or_default()
-            );
+
+        if !quiet {
+            if paths.len() > 1 {
+                println!("=== {} ===", path.display());
+            }
+            print_draft(&draft, explain, json && !confirm);
+        } else if json && !confirm {
+            print_draft(&draft, false, true);
+        }
+
+        if let Some((ref ledger, _)) = ledger_open {
+            let hash =
+                rradar_core::preprocess::content_hash(&std::fs::read(path).unwrap_or_default());
+            let result = ledger
+                .confirm_draft(&draft, Some(&hash), notes.as_deref(), force)
+                .map_err(|e| e.to_string())?;
+            if let Some(ref d) = result.dedupe {
+                eprintln!(
+                    "dedupe {:?} | {} | existing={}",
+                    d.level, d.message, d.existing_id
+                );
+            }
+            if result.inserted {
+                confirmed_n += 1;
+                println!("confirmed | {}", result.transaction.id);
+            } else {
+                println!(
+                    "skipped | {} | hard dedupe (use --force)",
+                    result.transaction.id
+                );
+            }
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&result).unwrap_or_default()
+                );
+            }
         }
     }
+
+    if let Some((ledger, tmp)) = ledger_open.take() {
+        maybe_reseal(&flags, &ledger, tmp)?;
+        if paths.len() > 1 {
+            println!("batch | confirmed={confirmed_n} files={}", paths.len());
+        }
+    }
+    Ok(())
+}
+
+fn cmd_manual(args: &[String]) -> Result<(), String> {
+    let mut merchant = None;
+    let mut amount = None;
+    let mut currency = Iso4217::TWD;
+    let mut category = "other".to_string();
+    let mut date = None;
+    let mut notes = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--merchant" => {
+                i += 1;
+                merchant = Some(args.get(i).ok_or("needs value")?.clone());
+            }
+            "--amount" => {
+                i += 1;
+                amount = Some(args.get(i).ok_or("needs value")?.clone());
+            }
+            "--currency" => {
+                i += 1;
+                let c = args.get(i).ok_or("needs value")?;
+                currency = Iso4217::parse(c).ok_or_else(|| format!("bad currency {c}"))?;
+            }
+            "--category" => {
+                i += 1;
+                category = args.get(i).ok_or("needs value")?.clone();
+            }
+            "--date" => {
+                i += 1;
+                date = Some(args.get(i).ok_or("needs value")?.clone());
+            }
+            "--notes" => {
+                i += 1;
+                notes = Some(args.get(i).ok_or("needs value")?.clone());
+            }
+            s if s.starts_with('-') => return Err(format!("unknown {s}")),
+            _ => {}
+        }
+        i += 1;
+    }
+    let merchant = merchant.ok_or("usage: rradar manual --merchant NAME --amount 89 [--date YYYY-MM-DD]")?;
+    let amount = amount.ok_or("--amount required")?;
+    let money = Money::from_major_str(&amount, currency).map_err(|e| e.to_string())?;
+    let day = date.unwrap_or_else(|| {
+        let iso = rradar_core::utc_now_iso();
+        iso.get(..10).unwrap_or("1970-01-01").to_string()
+    });
+    let cats = CategoryEngine::with_seed();
+    let mut ex = rradar_core::ExplainTrace::new("manual", "manual");
+    let cat_field = if category == "other" || category.is_empty() {
+        cats.categorize(&merchant, "", &mut ex)
+    } else {
+        rradar_core::Field::new(category, 1.0, rradar_core::FieldSource::User)
+    };
+    let draft = ReceiptDraft {
+        id: ReceiptDraft::new_id(),
+        captured_at: rradar_core::utc_now_iso(),
+        merchant: rradar_core::Field::new(merchant, 1.0, rradar_core::FieldSource::User),
+        total: rradar_core::Field::new(money, 1.0, rradar_core::FieldSource::User),
+        transacted_at: rradar_core::Field::new(day, 1.0, rradar_core::FieldSource::User),
+        tax: None,
+        invoice_id: None,
+        category: cat_field,
+        raw_text: String::new(),
+        ocr_blocks: vec![],
+        overall_confidence: 1.0,
+        explain: ex,
+        source_path: rradar_core::SourcePath::Manual,
+    };
+    let flags = extract_db_from_all(args)?;
+    let _ = ensure_data_dir();
+    let (ledger, tmp) = open_db(&flags)?;
+    let result = ledger
+        .confirm_draft(&draft, None, notes.as_deref(), true)
+        .map_err(|e| e.to_string())?;
+    println!("confirmed | {}", result.transaction.id);
+    maybe_reseal(&flags, &ledger, tmp)?;
+    Ok(())
+}
+
+fn cmd_import(args: &[String]) -> Result<(), String> {
+    // rradar import json path.json
+    if args.len() < 2 || args[0] != "json" {
+        return Err("usage: rradar import json <file.json>".into());
+    }
+    let path = &args[1];
+    let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let rows: Vec<Transaction> = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    let flags = extract_db_from_all(args)?;
+    let _ = ensure_data_dir();
+    let (ledger, tmp) = open_db(&flags)?;
+    let (ins, skip) = ledger.import_transactions(&rows).map_err(|e| e.to_string())?;
+    println!("import | inserted={ins} skipped={skip}");
+    maybe_reseal(&flags, &ledger, tmp)?;
     Ok(())
 }
 
@@ -355,7 +473,7 @@ fn cmd_list(args: &[String]) -> Result<(), String> {
         );
     } else {
         print_table(&rows);
-        eprintln!("({} rows, db={})", rows.len(), flags.db.display());
+        eprintln!("({} rows | db={})", rows.len(), flags.db.display());
     }
     if let Some(t) = tmp {
         let _ = std::fs::remove_file(t);
@@ -829,22 +947,21 @@ fn print_table(rows: &[Transaction]) {
         println!("(empty)");
         return;
     }
-    println!("date\t\tcurrency\tamount\t\tcategory\tmerchant\tid");
+    println!("date       | cur | amount     | category              | merchant             | id");
+    println!("-----------+-----+------------+-----------------------+----------------------+----");
     for t in rows {
         let m = Money::new(
             t.amount_minor,
             Iso4217::parse(&t.currency).unwrap_or(Iso4217::TWD),
         );
         let merch: String = t.merchant.chars().take(20).collect();
+        let cat: String = t.category.chars().take(21).collect();
         let date = t.transacted_at.get(..10).unwrap_or(&t.transacted_at);
+        let amt = format!("{:>10}", m.display_major());
         println!(
-            "{}\t{}\t{}\t{}\t{}\t{}",
-            date,
-            t.currency,
-            m.display_major(),
-            t.category,
-            merch,
-            t.id
+            "{date} | {cur:<3} | {amt} | {cat:<21} | {merch:<20} | {id}",
+            cur = t.currency,
+            id = t.id,
         );
     }
 }
@@ -866,8 +983,10 @@ Commands:
   init                 Create data dir + empty ledger
   doctor               Environment / db check
   path                 Print default home & db paths
-  process <file>       Parse receipt (alias: add)
-  list                 List transactions (alias: ls)
+  process <files…>     Parse receipt(s) (alias: add); batch OK
+  manual               Manual entry without OCR (alias: entry)
+  import json <file>   Import transactions JSON array
+  list                 List transactions (alias: ls, search)
   show <id>            Show one transaction (JSON)
   edit <id>            Edit merchant/amount/category/notes/date
   delete <id> --yes    Delete transaction (alias: rm)

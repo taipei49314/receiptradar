@@ -366,6 +366,51 @@ impl Ledger {
         Ok(n > 0)
     }
 
+    /// Insert a fully-formed transaction (import / manual). Fails if id exists.
+    pub fn insert_transaction(&self, tx: &Transaction) -> Result<(), LedgerError> {
+        self.conn.execute(
+            r#"INSERT INTO transactions(
+                id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
+                category, invoice_id, source_path, overall_confidence, content_hash, notes, raw_text, draft_json
+            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)"#,
+            params![
+                tx.id,
+                tx.confirmed_at,
+                tx.transacted_at,
+                tx.merchant,
+                tx.amount_minor,
+                tx.currency,
+                tx.exponent as i64,
+                tx.category,
+                tx.invoice_id,
+                tx.source_path,
+                tx.overall_confidence as f64,
+                tx.content_hash,
+                tx.notes,
+                Option::<String>::None,
+                Option::<String>::None,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Import list; skips existing ids. Returns (inserted, skipped).
+    pub fn import_transactions(&self, rows: &[Transaction]) -> Result<(usize, usize), LedgerError> {
+        let mut inserted = 0usize;
+        let mut skipped = 0usize;
+        for tx in rows {
+            match self.get_transaction(&tx.id) {
+                Ok(_) => skipped += 1,
+                Err(LedgerError::NotFound(_)) => {
+                    self.insert_transaction(tx)?;
+                    inserted += 1;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok((inserted, skipped))
+    }
+
     /// Partial update; only `Some` fields on [`TxUpdate`] are written.
     pub fn update_transaction(&self, id: &str, u: &TxUpdate) -> Result<Transaction, LedgerError> {
         let mut tx = self.get_transaction(id)?;

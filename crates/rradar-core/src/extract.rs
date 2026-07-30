@@ -92,6 +92,19 @@ pub fn extract_l1_fields(
             {
                 continue;
             }
+            // Skip fragments carved out of invoice ids like AB12345678
+            if re_invoice().is_match(line) && !line_has_total_keyword(line) {
+                continue;
+            }
+            // Tiny bare integers on non-total lines are usually noise (qty, codes)
+            if !line_has_total_keyword(line)
+                && !raw.contains('.')
+                && !raw.contains('$')
+                && !raw.contains('元')
+                && num.len() <= 2
+            {
+                continue;
+            }
             let currency = detect_currency(line, &raw, default_currency);
             if let Ok(money) = Money::from_major_str(num, currency) {
                 let mut score = 10;
