@@ -521,11 +521,56 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
         }
     }
 
+    step(8, "monthly markdown report");
+    // Pick a month that appears in fixtures (2024-05 family mart).
+    let md = monthly_markdown(&ledger, 2024, 5).map_err(|e| e.to_string())?;
+    let report_path = out_dir.join("demo-report-2024-05.md");
+    std::fs::write(&report_path, &md).map_err(|e| e.to_string())?;
+    if !quiet {
+        println!("  report | {}", report_path.display());
+        for line in md.lines().take(6) {
+            println!("  | {line}");
+        }
+    }
+
+    step(9, "ONNX model pin status (weights optional)");
+    let models_dir = rradar_ocr::default_models_dir();
+    match rradar_ocr::verify_models_dir(&models_dir, false) {
+        Ok(checks) if checks.is_empty() => {
+            if !quiet {
+                println!("  models | no pins loaded from {}", models_dir.display());
+            }
+        }
+        Ok(checks) => {
+            let ok = checks.iter().filter(|c| c.is_ok()).count();
+            if !quiet {
+                println!(
+                    "  models | {ok}/{} pins ok under {} (rradar models verify)",
+                    checks.len(),
+                    models_dir.display()
+                );
+            }
+        }
+        Err(e) => {
+            if !quiet {
+                println!("  models | {e}");
+            }
+        }
+    }
+
     if !quiet {
         println!();
         println!("DEMO_OK — closed loop finished ({n} rows in demo ledger).");
         println!("Next: rradar list --db {}", demo_db.display());
-        println!("      rradar process fixtures/text/familymart_89.txt --explain");
+        println!(
+            "      rradar report --year 2024 --month 5 --db {}",
+            demo_db.display()
+        );
+        println!("      rradar inbox --ensure && rradar watch --once");
+        println!(
+            "      rradar serve --db {}   # loopback HTTP only",
+            demo_db.display()
+        );
         println!("Record tip: capture this command output as a terminal GIF for README.");
     } else {
         println!("DEMO_OK n={n}");
@@ -1508,8 +1553,9 @@ fn cmd_serve(args: &[String]) -> Result<(), String> {
         }
         i += 1;
     }
-    if !bind.starts_with("127.") && !bind.starts_with("localhost") && !bind.starts_with("[::1]") {
-        return Err("refuse to bind non-loopback (local-only API)".into());
+    // Defense in depth: serve::run also rejects non-loopback.
+    if !serve::is_loopback_bind(&bind) {
+        return Err("refuse non-loopback bind (local-only API; use 127.0.0.1:PORT)".into());
     }
     let flags = extract_db_from_all(args)?;
     let _ = ensure_data_dir();

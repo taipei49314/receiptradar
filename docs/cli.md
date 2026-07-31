@@ -36,7 +36,8 @@ rradar demo --quiet          # CI-friendly
 powershell -File scripts/demo.ps1
 ```
 
-Covers: text fixtures + mock image bins + TW QR → confirm → list/stats/top → CSV/JSON export → encrypted backup.
+Covers: text + mock_ocr + TW QR → confirm → list/stats/top → export → backup → **monthly report** → model pin status.  
+Next steps printed: `inbox`/`watch`, `serve` (loopback HTTP — [local-api.md](./local-api.md)).
 
 ## Daily workflow
 

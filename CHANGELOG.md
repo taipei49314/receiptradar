@@ -3,7 +3,11 @@
 ## 0.1.0-alpha (unreleased)
 
 ### Fixed
+- Network audit allowlist for loopback/`rradar serve` (restore CI green after local HTTP API)
 - Windows CI: mock OCR fixtures tolerate CRLF magic terminators; `.gitattributes` marks `fixtures/mock_ocr/**` binary
+
+### Changed
+- `rradar serve` loopback enforcement in server; GET `/models`; demo steps for report + model pins
 
 ### Added
 - **ONNX A05 hash pins:** committed `models/manifest.sha256` (det/rec/cls); `rradar models status|verify`; fetch-models `-WritePins`

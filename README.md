@@ -62,8 +62,11 @@ rradar help
 | Schema migrate | `migrate` (local SQLite; no cloud) |
 | At-rest seal | `seal` / `unseal` |
 | TW e-invoice QR | `--qr` / `--qr-file` |
+| Monthly report | `report` |
+| Drop folder watch | `inbox` + `watch` |
+| Local HTTP API | `serve` (127.0.0.1 only) |
 
-**Never** sums different currencies together.
+**Never** sums different currencies together. Local API: [docs/local-api.md](./docs/local-api.md).
 
 ## Privacy
 

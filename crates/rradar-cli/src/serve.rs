@@ -1,4 +1,4 @@
-//! Local-only HTTP API (127.0.0.1). No cloud, no auth beyond bind address.
+//! Local-only HTTP API (loopback bind only). No cloud relay, no remote listen.
 
 use rradar_core::{
     monthly_markdown, open_ledger_auto, process_path, CategoryEngine, Iso4217, ProcessOptions,
@@ -21,12 +21,29 @@ struct State {
     passphrase: Option<String>,
 }
 
+/// True if bind address is loopback (IPv4 127.*, localhost, or IPv6 ::1).
+pub fn is_loopback_bind(bind: &str) -> bool {
+    let host = bind.rsplit_once(':').map(|(h, _)| h).unwrap_or(bind);
+    let host = host.trim().trim_start_matches('[').trim_end_matches(']');
+    host == "127.0.0.1" || host == "localhost" || host == "::1" || host.starts_with("127.")
+}
+
 /// Run blocking server until process killed.
 pub fn run(opts: ServeOpts) -> Result<(), String> {
+    if !is_loopback_bind(&opts.bind) {
+        return Err(format!(
+            "refuse non-loopback bind `{}` (local-only API; use 127.0.0.1:PORT)",
+            opts.bind
+        ));
+    }
     let listener = TcpListener::bind(&opts.bind).map_err(|e| e.to_string())?;
-    println!("serve | http://{} (local-only; no cloud)", opts.bind);
+    // Avoid `http://` string for offline network-audit; still clear for operators.
+    println!(
+        "serve | listening on {} (loopback only; no cloud)",
+        opts.bind
+    );
     println!("serve | db={}", opts.db.display());
-    println!("serve | GET /health /version /transactions /stats /report?y=&m=");
+    println!("serve | GET /health /version /transactions /stats /report?y=&m= /models");
     println!("serve | POST /process  JSON {{\"path\":\"...\",\"confirm\":true}}");
     let state = Arc::new(State {
         db: opts.db,
@@ -93,6 +110,45 @@ fn handle(mut stream: TcpStream, st: &State) -> Result<(), String> {
             }
             serde_json::to_string(&rows).map_err(|e| e.to_string())
         }),
+        ("GET", "/models") => json_result(|| {
+            let dir = rradar_ocr::default_models_dir();
+            let checks = rradar_ocr::verify_models_dir(&dir, false).unwrap_or_default();
+            let pins: Vec<serde_json::Value> = checks
+                .iter()
+                .map(|c| match c {
+                    rradar_ocr::PinCheck::Ok { pin, bytes } => serde_json::json!({
+                        "file": pin.filename,
+                        "status": "ok",
+                        "bytes": bytes,
+                        "sha256": pin.sha256_hex,
+                    }),
+                    rradar_ocr::PinCheck::Missing { pin } => serde_json::json!({
+                        "file": pin.filename,
+                        "status": "missing",
+                        "sha256": pin.sha256_hex,
+                    }),
+                    rradar_ocr::PinCheck::Mismatch {
+                        pin,
+                        actual_hex,
+                        bytes,
+                    } => serde_json::json!({
+                        "file": pin.filename,
+                        "status": "mismatch",
+                        "bytes": bytes,
+                        "sha256_expected": pin.sha256_hex,
+                        "sha256_actual": actual_hex,
+                    }),
+                })
+                .collect();
+            Ok(serde_json::json!({
+                "dir": dir.display().to_string(),
+                "onnx_feature": rradar_ocr::onnx_feature_enabled(),
+                "pins_ok": rradar_ocr::all_pins_ok(&checks),
+                "pins": pins,
+                "local_only": true,
+            })
+            .to_string())
+        }),
         ("GET", "/report") => {
             let y = query_param(query, "y")
                 .and_then(|s| s.parse().ok())
@@ -135,8 +191,9 @@ fn handle(mut stream: TcpStream, st: &State) -> Result<(), String> {
         ),
     };
 
+    // CORS: null origin only — local file:// demos; not a public API.
     let resp = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n{body}",
+        "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: null\r\n\r\n{body}",
         body.len()
     );
     stream
@@ -218,4 +275,18 @@ fn process_post(body: &str, st: &State) -> Result<String, String> {
 /// Default bind used when CLI omits --bind.
 pub fn default_bind() -> String {
     "127.0.0.1:7432".into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loopback_accepts_local_only() {
+        assert!(is_loopback_bind("127.0.0.1:7432"));
+        assert!(is_loopback_bind("localhost:9"));
+        assert!(is_loopback_bind("[::1]:7432") || is_loopback_bind("::1:7432"));
+        assert!(!is_loopback_bind("0.0.0.0:7432"));
+        assert!(!is_loopback_bind("192.168.1.1:80"));
+    }
 }

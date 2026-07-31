@@ -177,20 +177,6 @@
 - Desktop A05 artifact names + SHA-256 frozen; CI stays mock-only (weights gitignored)  
 - CI windows green confirmed on prior cycle  
 
-### Next seeds
-| Priority | Item |
-|----------|------|
-| P1 | Keep CI green |
-| P2 | FRB when Flutter present |
-| P3 | Device A04 measurements / e2e image fixture with optional onnx nightly |
-
-## Rules
-- No questions between cycles unless secrets / destructive remote  
-- Green tests before re-plan  
-- Non-goals: official sync, GPT wrapper  
-
-
-
 ## Full-speed sprint (2026-07-31 user request)
 
 ### Plan
@@ -207,3 +193,32 @@ Product analytics + inbox automation + FFI analytics surface
 
 ### Repo
 - tag v0.1.0-cli.8
+
+## Cycle 18 — CI green + local API boundary + demo expand (axes #4 + #5 + #2)
+
+### Plan
+1. Fix CI network-audit false positive on `rradar serve` (`http://{}`)
+2. Harden serve: loopback check in server, no `http://` banner, `/models` endpoint
+3. Expand `rradar demo` with monthly report + model pin status + serve/inbox next steps
+4. Document `docs/local-api.md`
+
+### Verify
+- `python tools/network-audit/check_offline_deps.py` exit 0
+- `cargo test --workspace --locked` / clippy green
+- `rradar demo --quiet` OK
+
+### Result
+- All-OS CI should pass network audit again
+- Demo closed loop covers report + models; serve is explicitly local-only
+
+### Next seeds
+| Priority | Item |
+|----------|------|
+| P1 | Confirm Actions green after this push |
+| P2 | FRB when Flutter present |
+| P3 | ONNX e2e image smoke (optional nightly) with pinned models |
+
+## Rules
+- No questions between cycles unless secrets / destructive remote  
+- Green tests before re-plan  
+- Non-goals: official sync, GPT wrapper  
