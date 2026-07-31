@@ -1,5 +1,6 @@
 //! Local multi-device handoff packages (file-based; no cloud relay).
 
+use crate::attachments::{collect_attachment_files, write_attachment_files};
 use crate::crypto::{seal_backup, unseal_backup, ARGON2_M_KIB};
 use crate::export::{pack_archive, unpack_archive, ExportError};
 use crate::ledger::Ledger;
@@ -17,6 +18,9 @@ pub struct HandoffManifest {
     pub device_label: String,
     pub transaction_count: i64,
     pub note: String,
+    /// Receipt attachment blobs packed under `attachments/` (0 if none / legacy).
+    #[serde(default)]
+    pub attachment_count: u32,
 }
 
 /// Create encrypted handoff blob (same crypto family as backup.rradar).
@@ -28,6 +32,7 @@ pub fn create_handoff(
     let sqlite = ledger.export_sqlite_bytes()?;
     let txs = ledger.export_all()?;
     let txs_json = serde_json::to_vec_pretty(&txs)?;
+    let att_files = collect_attachment_files(ledger.path())?;
     let manifest = HandoffManifest {
         format: "rradar-handoff-v1".into(),
         schema_version: LEDGER_SCHEMA_VERSION,
@@ -36,13 +41,19 @@ pub fn create_handoff(
         device_label: device_label.into(),
         transaction_count: txs.len() as i64,
         note: format!("{PRODUCT_ID} multi-device handoff; decrypt offline only"),
+        attachment_count: att_files.len() as u32,
     };
     let man = serde_json::to_vec_pretty(&manifest)?;
-    let archive = pack_archive(&[
-        ("handoff.json", &man),
-        ("ledger.sqlite", &sqlite),
-        ("transactions.json", &txs_json),
-    ]);
+    let mut owned: Vec<(String, Vec<u8>)> = Vec::with_capacity(3 + att_files.len());
+    owned.push(("handoff.json".into(), man));
+    owned.push(("ledger.sqlite".into(), sqlite));
+    owned.push(("transactions.json".into(), txs_json));
+    owned.extend(att_files);
+    let refs: Vec<(&str, &[u8])> = owned
+        .iter()
+        .map(|(n, d)| (n.as_str(), d.as_slice()))
+        .collect();
+    let archive = pack_archive(&refs);
     let m = if std::env::var("RRADAR_FAST_BACKUP").is_ok() {
         8
     } else {
@@ -62,7 +73,7 @@ pub fn inspect_handoff(passphrase: &str, sealed: &[u8]) -> Result<HandoffManifes
     Err(ExportError::Format("missing handoff.json".into()))
 }
 
-/// Apply handoff: write sqlite path and/or merge transactions.
+/// Apply handoff: merge transactions and re-hydrate attachment blobs next to target ledger.
 pub fn apply_handoff_merge(
     passphrase: &str,
     sealed: &[u8],
@@ -72,10 +83,13 @@ pub fn apply_handoff_merge(
     let files = unpack_archive(&plain)?;
     let mut manifest: Option<HandoffManifest> = None;
     let mut txs_json: Option<Vec<u8>> = None;
+    let mut attachments: Vec<(String, Vec<u8>)> = Vec::new();
     for (name, data) in files {
-        match name.as_str() {
+        let norm = name.replace('\\', "/");
+        match norm.as_str() {
             "handoff.json" => manifest = Some(serde_json::from_slice(&data)?),
             "transactions.json" => txs_json = Some(data),
+            n if n.starts_with("attachments/") => attachments.push((norm, data)),
             _ => {}
         }
     }
@@ -83,6 +97,7 @@ pub fn apply_handoff_merge(
     let raw = txs_json.ok_or_else(|| ExportError::Format("missing transactions.json".into()))?;
     let rows: Vec<crate::ledger::Transaction> = serde_json::from_slice(&raw)?;
     let (ins, skip) = target.import_transactions(&rows)?;
+    let _ = write_attachment_files(target.path(), &attachments)?;
     Ok((ins, skip, manifest))
 }
 

@@ -1,5 +1,6 @@
 //! CSV / JSON export and backup.rradar packaging.
 
+use crate::attachments::{collect_attachment_files, write_attachment_files, AttachmentError};
 use crate::crypto::{seal_backup, unseal_backup, CryptoError, ARGON2_M_KIB};
 use crate::ledger::{Ledger, LedgerError, Transaction};
 use crate::pipeline::utc_now_iso;
@@ -22,6 +23,8 @@ pub enum ExportError {
     Utf8(#[from] std::string::FromUtf8Error),
     #[error("backup format: {0}")]
     Format(String),
+    #[error("attachment: {0}")]
+    Attachment(#[from] AttachmentError),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,6 +37,9 @@ pub struct BackupManifest {
     /// Ledger SQLite schema version at backup time (0 = legacy / unknown).
     #[serde(default)]
     pub ledger_schema_version: u32,
+    /// Number of receipt attachment blobs packed under `attachments/` (0 if none / legacy).
+    #[serde(default)]
+    pub attachment_count: u32,
 }
 
 /// Opened backup with archive inventory (for `backup info` / verify).
@@ -43,6 +49,7 @@ pub struct BackupInspect {
     pub files: Vec<BackupFileInfo>,
     pub has_sqlite: bool,
     pub has_transactions_json: bool,
+    pub attachment_file_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -101,15 +108,21 @@ pub fn transactions_to_csv(rows: &[Transaction]) -> Result<String, ExportError> 
     w.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
     writeln!(
         w,
-        "id,confirmed_at,transacted_at,merchant,amount_minor,currency,exponent,category,invoice_id,source_path,confidence,notes"
+        "id,confirmed_at,transacted_at,merchant,amount_minor,currency,exponent,category,invoice_id,source_path,confidence,notes,tags,attachment_path"
     )?;
     for t in rows {
         let inv = t.invoice_id.as_deref().unwrap_or("");
         let notes = t.notes.as_deref().unwrap_or("").replace('"', "\"\"");
         let merchant = t.merchant.replace('"', "\"\"");
+        let tags = t.tags.as_deref().unwrap_or("").replace('"', "\"\"");
+        let att = t
+            .attachment_path
+            .as_deref()
+            .unwrap_or("")
+            .replace('"', "\"\"");
         writeln!(
             w,
-            "{},{},{},\"{}\",{},{},{},{},{},{},{:.4},\"{}\"",
+            "{},{},{},\"{}\",{},{},{},{},{},{},{:.4},\"{}\",\"{}\",\"{}\"",
             t.id,
             t.confirmed_at,
             t.transacted_at,
@@ -121,7 +134,9 @@ pub fn transactions_to_csv(rows: &[Transaction]) -> Result<String, ExportError> 
             inv,
             t.source_path,
             t.overall_confidence,
-            notes
+            notes,
+            tags,
+            att
         )?;
     }
     Ok(String::from_utf8(w)?)
@@ -132,6 +147,8 @@ pub fn transactions_to_json(rows: &[Transaction]) -> Result<String, ExportError>
 }
 
 /// Create encrypted backup.rradar bytes from ledger.
+///
+/// Includes optional receipt blobs from `{db_parent}/attachments/**` when present.
 pub fn create_backup(
     ledger: &Ledger,
     passphrase: &str,
@@ -140,20 +157,30 @@ pub fn create_backup(
     let txs = ledger.export_all()?;
     let sqlite = ledger.export_sqlite_bytes()?;
     let ledger_schema = ledger.schema_version_u32().unwrap_or(0);
+    let att_files = collect_attachment_files(ledger.path())?;
     let manifest = BackupManifest {
         schema_version: 1,
         created_at: utc_now_iso(),
         app_version: VERSION.to_string(),
         transaction_count: txs.len() as i64,
         ledger_schema_version: ledger_schema,
+        attachment_count: att_files.len() as u32,
     };
     let manifest_json = serde_json::to_vec_pretty(&manifest)?;
     let txs_json = serde_json::to_vec(&txs)?;
-    let archive = pack_archive(&[
-        ("manifest.json", &manifest_json),
-        ("ledger.sqlite", &sqlite),
-        ("transactions.json", &txs_json),
-    ]);
+
+    // Own all payloads so we can pack a dynamic file list (core + attachments).
+    let mut owned: Vec<(String, Vec<u8>)> = Vec::with_capacity(3 + att_files.len());
+    owned.push(("manifest.json".into(), manifest_json));
+    owned.push(("ledger.sqlite".into(), sqlite));
+    owned.push(("transactions.json".into(), txs_json));
+    owned.extend(att_files);
+
+    let refs: Vec<(&str, &[u8])> = owned
+        .iter()
+        .map(|(n, d)| (n.as_str(), d.as_slice()))
+        .collect();
+    let archive = pack_archive(&refs);
     Ok(seal_backup(passphrase, &archive, m_kib)?)
 }
 
@@ -164,12 +191,15 @@ pub fn inspect_backup(passphrase: &str, sealed: &[u8]) -> Result<BackupInspect, 
     let mut manifest: Option<BackupManifest> = None;
     let mut has_sqlite = false;
     let mut has_transactions_json = false;
+    let mut attachment_file_count = 0usize;
     let mut files = Vec::with_capacity(files_raw.len());
     for (name, data) in &files_raw {
-        match name.as_str() {
+        let norm = name.replace('\\', "/");
+        match norm.as_str() {
             "manifest.json" => manifest = Some(serde_json::from_slice(data)?),
             "ledger.sqlite" => has_sqlite = true,
             "transactions.json" => has_transactions_json = true,
+            n if n.starts_with("attachments/") => attachment_file_count += 1,
             _ => {}
         }
         files.push(BackupFileInfo {
@@ -183,6 +213,7 @@ pub fn inspect_backup(passphrase: &str, sealed: &[u8]) -> Result<BackupInspect, 
         files,
         has_sqlite,
         has_transactions_json,
+        attachment_file_count,
     })
 }
 
@@ -224,6 +255,8 @@ pub struct RestoredBackup {
     pub manifest: BackupManifest,
     pub transactions_json: Option<Vec<u8>>,
     pub sqlite_bytes: Option<Vec<u8>>,
+    /// Attachment archive entries (`attachments/...` → bytes).
+    pub attachments: Vec<(String, Vec<u8>)>,
 }
 
 pub fn restore_backup(passphrase: &str, sealed: &[u8]) -> Result<RestoredBackup, ExportError> {
@@ -232,13 +265,16 @@ pub fn restore_backup(passphrase: &str, sealed: &[u8]) -> Result<RestoredBackup,
     let mut manifest: Option<BackupManifest> = None;
     let mut transactions_json = None;
     let mut sqlite_bytes = None;
+    let mut attachments = Vec::new();
     for (name, data) in files {
-        match name.as_str() {
+        let norm = name.replace('\\', "/");
+        match norm.as_str() {
             "manifest.json" => {
                 manifest = Some(serde_json::from_slice(&data)?);
             }
             "transactions.json" => transactions_json = Some(data),
             "ledger.sqlite" => sqlite_bytes = Some(data),
+            n if n.starts_with("attachments/") => attachments.push((norm, data)),
             _ => {}
         }
     }
@@ -247,6 +283,7 @@ pub fn restore_backup(passphrase: &str, sealed: &[u8]) -> Result<RestoredBackup,
         manifest,
         transactions_json,
         sqlite_bytes,
+        attachments,
     })
 }
 
@@ -259,6 +296,14 @@ pub fn write_restored_db(path: &std::path::Path, sqlite_bytes: &[u8]) -> Result<
     }
     std::fs::write(path, sqlite_bytes)?;
     Ok(())
+}
+
+/// Write attachment blobs from a restored backup next to the target ledger path.
+pub fn write_restored_attachments(
+    db_path: &std::path::Path,
+    restored: &RestoredBackup,
+) -> Result<usize, ExportError> {
+    Ok(write_attachment_files(db_path, &restored.attachments)?)
 }
 
 #[cfg(test)]
@@ -295,6 +340,8 @@ mod tests {
         let csv = transactions_to_csv(&rows).unwrap();
         assert!(csv.contains("amount_minor"));
         assert!(csv.contains("500"));
+        assert!(csv.contains("tags"));
+        assert!(csv.contains("attachment_path"));
 
         let sealed = create_backup(&db, "secret", 8).unwrap();
         let restored = restore_backup("secret", &sealed).unwrap();
@@ -309,6 +356,52 @@ mod tests {
         assert_eq!(m.transaction_count, 1);
         let txs = transactions_from_backup(&restore_backup("secret", &sealed).unwrap()).unwrap();
         assert_eq!(txs.len(), 1);
+    }
+
+    #[test]
+    fn backup_includes_attachment_blobs() {
+        let tmp = std::env::temp_dir().join(format!("rradar-bak-att-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let db_path = tmp.join("ledger.db");
+        let ledger = Ledger::open(&db_path).unwrap();
+        let res = ledger
+            .confirm_draft(&draft(), Some("h"), Some("note"), false)
+            .unwrap();
+        let tx_id = res.transaction.id.clone();
+        let src = tmp.join("shot.png");
+        std::fs::write(&src, b"PNGDATA").unwrap();
+        let rel = crate::attachments::store_attachment(&db_path, &tx_id, &src).unwrap();
+        ledger
+            .update_transaction(
+                &tx_id,
+                &crate::ledger::TxUpdate {
+                    attachment_path: Some(rel.clone()),
+                    tags: Some("demo,receipt".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let sealed = create_backup(&ledger, "secret", 8).unwrap();
+        let info = inspect_backup("secret", &sealed).unwrap();
+        assert_eq!(info.attachment_file_count, 1);
+        assert_eq!(info.manifest.attachment_count, 1);
+        assert!(info
+            .files
+            .iter()
+            .any(|f| f.name.starts_with("attachments/")));
+
+        let dest = tmp.join("restored");
+        std::fs::create_dir_all(&dest).unwrap();
+        let dest_db = dest.join("ledger.db");
+        let restored = restore_backup("secret", &sealed).unwrap();
+        write_restored_db(&dest_db, restored.sqlite_bytes.as_ref().unwrap()).unwrap();
+        let n = write_restored_attachments(&dest_db, &restored).unwrap();
+        assert_eq!(n, 1);
+        let abs = crate::attachments::resolve_attachment_path(&dest_db, &rel);
+        assert_eq!(std::fs::read(abs).unwrap(), b"PNGDATA");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

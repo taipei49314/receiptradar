@@ -32,9 +32,17 @@ Required entries:
 
 | Name | Content |
 |------|---------|
-| `manifest.json` | `schema_version` (package), `created_at`, `app_version`, `transaction_count`, optional `ledger_schema_version` |
+| `manifest.json` | `schema_version` (package), `created_at`, `app_version`, `transaction_count`, optional `ledger_schema_version`, optional `attachment_count` |
 | `ledger.sqlite` | SQLite DB bytes |
 | `transactions.json` | Array of transaction rows (convenience; used by `--merge` / `import backup`) |
+
+Optional entries (schema v3 attachment store):
+
+| Name | Content |
+|------|---------|
+| `attachments/{tx_id}/{filename}` | Raw receipt file bytes (copied from `{db_parent}/attachments/`) |
+
+On `backup restore` / `restore --merge`, attachment entries are written next to the target ledger so relative `attachment_path` values keep working. Handoff packages use the same optional layout.
 
 CLI helpers: `rradar backup info|verify|restore [--merge]`. Multi-device = user-mediated file copy only (no official relay). See [ledger-schema.md](./ledger-schema.md).
 

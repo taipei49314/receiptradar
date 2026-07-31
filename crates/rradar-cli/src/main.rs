@@ -3,13 +3,15 @@
 mod serve;
 
 use rradar_core::{
-    apply_edits, apply_handoff_merge, category_engine_with_packs, create_backup, create_handoff,
-    data_dir, default_db_path, ensure_data_dir, ensure_inbox_dir, ensure_rules_dir, inbox_dir,
-    inspect_backup, inspect_handoff, install_rule_pack, list_rule_files, monthly_markdown,
-    open_ledger_auto, process_path, restore_backup, rules_dir, save_sealed,
-    transactions_from_backup, transactions_to_csv, transactions_to_json, verify_backup,
-    write_handoff_file, write_restored_db, AppConfig, Iso4217, Money, ProcessOptions, ReceiptDraft,
-    Transaction, TxUpdate, UserEdits, LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
+    apply_edits, apply_handoff_merge, attachments_root_for_db, category_engine_with_packs,
+    create_backup, create_handoff, data_dir, default_db_path, ensure_data_dir, ensure_inbox_dir,
+    ensure_rules_dir, inbox_dir, inspect_backup, inspect_handoff, install_rule_pack,
+    list_rule_files, monthly_markdown, normalize_tags, open_ledger_auto, process_path,
+    remove_stored_attachment, resolve_attachment_path, restore_backup, rules_dir, save_sealed,
+    store_attachment, transactions_from_backup, transactions_to_csv, transactions_to_json,
+    verify_backup, write_handoff_file, write_restored_attachments, write_restored_db, AppConfig,
+    Iso4217, Money, ProcessOptions, ReceiptDraft, Transaction, TxUpdate, UserEdits,
+    LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
 };
 use rradar_ocr::engine_by_name;
 use std::env;
@@ -45,6 +47,8 @@ fn main() -> ExitCode {
         "show" => cmd_show(&args[1..]),
         "delete" | "rm" => cmd_delete(&args[1..]),
         "edit" => cmd_edit(&args[1..]),
+        "attach" => cmd_attach(&args[1..]),
+        "detach" => cmd_detach(&args[1..]),
         "stats" => cmd_stats(&args[1..]),
         "top" => cmd_top(&args[1..]),
         "report" => cmd_report(&args[1..]),
@@ -63,9 +67,11 @@ fn main() -> ExitCode {
         "seal" => cmd_seal(&args[1..]),
         "unseal" => cmd_unseal(&args[1..]),
         "path" => {
-            println!("home  | {}", data_dir().display());
-            println!("db    | {}", default_db_path().display());
-            println!("inbox | {}", inbox_dir().display());
+            let db = default_db_path();
+            println!("home        | {}", data_dir().display());
+            println!("db          | {}", db.display());
+            println!("inbox       | {}", inbox_dir().display());
+            println!("attachments | {}", attachments_root_for_db(&db).display());
             Ok(())
         }
         other => Err(format!("unknown command `{other}` — try `rradar help`")),
@@ -321,6 +327,11 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
     if demo_db.is_file() {
         let _ = std::fs::remove_file(&demo_db);
     }
+    // Drop previous demo attachments so backup counts stay deterministic.
+    let demo_att = attachments_root_for_db(&demo_db);
+    if demo_att.is_dir() {
+        let _ = std::fs::remove_dir_all(&demo_att);
+    }
     let ledger = rradar_core::Ledger::open(&demo_db).map_err(|e| e.to_string())?;
     let eng = engine_by_name("mock").map_err(|e| e.to_string())?;
     let categories = category_engine_with_packs();
@@ -417,6 +428,7 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
 
     step(3, "pixel path image + .ocr.txt sidecar (CI-safe)");
     let img_sidecar = fixtures.join("images/familymart_photo.png");
+    let mut sidecar_tx_id: Option<String> = None;
     if img_sidecar.is_file() {
         let draft = process_path(
             &img_sidecar,
@@ -435,6 +447,7 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
         if res.inserted {
             confirmed += 1;
+            sidecar_tx_id = Some(res.transaction.id.clone());
         }
         if !quiet {
             println!(
@@ -450,7 +463,35 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
         println!("  (skip — fixtures/images not present)");
     }
 
-    step(4, "TW e-invoice QR prefer path");
+    step(4, "attach receipt blob + tags (schema v3 local store)");
+    if let Some(ref tid) = sidecar_tx_id {
+        if img_sidecar.is_file() {
+            let rel =
+                store_attachment(ledger.path(), tid, &img_sidecar).map_err(|e| e.to_string())?;
+            let tx = ledger
+                .update_transaction(
+                    tid,
+                    &TxUpdate {
+                        attachment_path: Some(rel.clone()),
+                        tags: Some("demo,receipt,sidecar".into()),
+                        ..Default::default()
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+            if !quiet {
+                println!("  ✓ attach | {rel}");
+                println!("  ✓ tags   | {}", tx.tags.as_deref().unwrap_or("(none)"));
+                println!(
+                    "  ✓ store  | {}",
+                    resolve_attachment_path(ledger.path(), &rel).display()
+                );
+            }
+        }
+    } else if !quiet {
+        println!("  (skip — no image sidecar transaction)");
+    }
+
+    step(5, "TW e-invoice QR prefer path");
     if qr_sample.is_file() {
         let payload = std::fs::read_to_string(&qr_sample)
             .map_err(|e| e.to_string())?
@@ -490,7 +531,7 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
         println!("  (skip — qr sample missing)");
     }
 
-    step(5, "browse ledger");
+    step(6, "browse ledger");
     let n = ledger.count().map_err(|e| e.to_string())?;
     let rows = ledger.list_transactions(8, 0).map_err(|e| e.to_string())?;
     if !quiet {
@@ -506,7 +547,7 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
         }
     }
 
-    step(6, "stats + top merchants");
+    step(7, "stats + top merchants");
     let stats = ledger.stats_by_currency_all().map_err(|e| e.to_string())?;
     if !quiet {
         for s in &stats {
@@ -522,7 +563,7 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
         }
     }
 
-    step(7, "export CSV + JSON");
+    step(8, "export CSV + JSON");
     let out_dir = demo_db
         .parent()
         .map(Path::to_path_buf)
@@ -542,7 +583,7 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
     }
 
     if !skip_backup {
-        step(8, "encrypted backup.rradar");
+        step(9, "encrypted backup.rradar (+ attachment blobs)");
         // Demo passphrase is intentionally public; real users choose their own.
         let bak = out_dir.join("demo-backup.rradar");
         let bytes = create_backup(
@@ -553,14 +594,21 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
         std::fs::write(&bak, bytes).map_err(|e| e.to_string())?;
         if !quiet {
-            println!(
-                "  backup | {}  (passphrase: demo-passphrase)",
-                bak.display()
-            );
+            match inspect_backup("demo-passphrase", &std::fs::read(&bak).unwrap_or_default()) {
+                Ok(info) => println!(
+                    "  backup | {}  attachments={}  (passphrase: demo-passphrase)",
+                    bak.display(),
+                    info.attachment_file_count
+                ),
+                Err(_) => println!(
+                    "  backup | {}  (passphrase: demo-passphrase)",
+                    bak.display()
+                ),
+            }
         }
     }
 
-    step(9, "monthly markdown report");
+    step(10, "monthly markdown report");
     // Pick a month that appears in fixtures (2024-05 family mart).
     let md = monthly_markdown(&ledger, 2024, 5).map_err(|e| e.to_string())?;
     let report_path = out_dir.join("demo-report-2024-05.md");
@@ -572,7 +620,7 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
         }
     }
 
-    step(10, "ONNX model pin status (weights optional)");
+    step(11, "ONNX model pin status (weights optional)");
     let models_dir = rradar_ocr::default_models_dir();
     match rradar_ocr::verify_models_dir(&models_dir, false) {
         Ok(checks) if checks.is_empty() => {
@@ -687,6 +735,8 @@ fn cmd_process(args: &[String]) -> Result<(), String> {
     let mut category: Option<String> = None;
     let mut date: Option<String> = None;
     let mut quiet = false;
+    let mut attach = false;
+    let mut tags: Option<String> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -696,6 +746,11 @@ fn cmd_process(args: &[String]) -> Result<(), String> {
             "--confirm" | "-c" => confirm = true,
             "--force" => force = true,
             "--quiet" | "-q" => quiet = true,
+            "--attach" => attach = true,
+            "--tags" => {
+                i += 1;
+                tags = Some(args.get(i).ok_or("--tags needs value")?.clone());
+            }
             "--engine" => {
                 i += 1;
                 engine = args.get(i).ok_or("--engine needs value")?.clone();
@@ -831,6 +886,27 @@ fn cmd_process(args: &[String]) -> Result<(), String> {
             if result.inserted {
                 confirmed_n += 1;
                 println!("confirmed | {}", result.transaction.id);
+                // Optional: copy source file into local attachments store + tags.
+                let mut patch = TxUpdate::default();
+                if attach && path.is_file() {
+                    match store_attachment(ledger.path(), &result.transaction.id, path) {
+                        Ok(rel) => {
+                            patch.attachment_path = Some(rel.clone());
+                            if !quiet {
+                                println!("attached  | {rel}");
+                            }
+                        }
+                        Err(e) => eprintln!("attach warn | {e}"),
+                    }
+                }
+                if let Some(ref t) = tags {
+                    patch.tags = Some(normalize_tags(t).unwrap_or_default());
+                }
+                if patch.attachment_path.is_some() || patch.tags.is_some() {
+                    let _ = ledger
+                        .update_transaction(&result.transaction.id, &patch)
+                        .map_err(|e| e.to_string())?;
+                }
             } else {
                 println!(
                     "skipped | {} | hard dedupe (use --force)",
@@ -838,10 +914,18 @@ fn cmd_process(args: &[String]) -> Result<(), String> {
                 );
             }
             if json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&result).unwrap_or_default()
-                );
+                // Re-fetch after optional attach/tags patch for accurate JSON.
+                let out = ledger
+                    .get_transaction(&result.transaction.id)
+                    .map(|tx| {
+                        serde_json::json!({
+                            "transaction": tx,
+                            "dedupe": result.dedupe,
+                            "inserted": result.inserted,
+                        })
+                    })
+                    .unwrap_or_else(|_| serde_json::to_value(&result).unwrap_or_default());
+                println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
             }
         }
     }
@@ -990,8 +1074,10 @@ fn cmd_import(args: &[String]) -> Result<(), String> {
             let (ins, skip) = ledger
                 .import_transactions(&rows)
                 .map_err(|e| e.to_string())?;
+            let att_n =
+                write_restored_attachments(ledger.path(), &restored).map_err(|e| e.to_string())?;
             println!(
-                "import backup | inserted={ins} skipped={skip} (from {} txs; multi-device via backup only)",
+                "import backup | inserted={ins} skipped={skip} attachments={att_n} (from {} txs; multi-device via backup only)",
                 rows.len()
             );
             maybe_reseal(&flags, &ledger, tmp)?;
@@ -1309,7 +1395,7 @@ fn cmd_edit(args: &[String]) -> Result<(), String> {
         .iter()
         .find(|a| !a.starts_with('-'))
         .ok_or(
-            "usage: rradar edit <id> [--merchant M] [--amount X] [--currency C] [--category K] [--notes N] [--date YYYY-MM-DD]",
+            "usage: rradar edit <id> [--merchant M] [--amount X] [--currency C] [--category K] [--notes N] [--date YYYY-MM-DD] [--tags T] [--clear-tags]",
         )?
         .clone();
     let mut merchant = None;
@@ -1318,6 +1404,8 @@ fn cmd_edit(args: &[String]) -> Result<(), String> {
     let mut category = None;
     let mut notes = None;
     let mut date = None;
+    let mut tags: Option<String> = None;
+    let mut clear_tags = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -1345,6 +1433,11 @@ fn cmd_edit(args: &[String]) -> Result<(), String> {
                 i += 1;
                 date = Some(args.get(i).ok_or("needs value")?.clone());
             }
+            "--tags" => {
+                i += 1;
+                tags = Some(args.get(i).ok_or("needs value")?.clone());
+            }
+            "--clear-tags" => clear_tags = true,
             _ => {}
         }
         i += 1;
@@ -1366,6 +1459,11 @@ fn cmd_edit(args: &[String]) -> Result<(), String> {
     } else {
         None
     };
+    let tags_patch = if clear_tags {
+        Some(String::new())
+    } else {
+        tags.map(|t| normalize_tags(&t).unwrap_or_default())
+    };
     let tx = ledger
         .update_transaction(
             &id,
@@ -1376,10 +1474,113 @@ fn cmd_edit(args: &[String]) -> Result<(), String> {
                 category,
                 notes,
                 transacted_at: date,
+                tags: tags_patch,
                 ..Default::default()
             },
         )
         .map_err(|e| e.to_string())?;
+    println!("{}", serde_json::to_string_pretty(&tx).unwrap_or_default());
+    maybe_reseal(&flags, &ledger, tmp)?;
+    Ok(())
+}
+
+/// Copy a receipt file into the local attachments store and set `attachment_path`.
+fn cmd_attach(args: &[String]) -> Result<(), String> {
+    let mut id: Option<String> = None;
+    let mut file: Option<PathBuf> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--file" | "-f" => {
+                i += 1;
+                file = Some(PathBuf::from(args.get(i).ok_or("--file needs path")?));
+            }
+            "--help" | "-h" => {
+                println!(
+                    "rradar attach <id> <file> | attach <id> --file PATH\n  \
+                     Copy receipt into {{db_dir}}/attachments/{{id}}/ and set attachment_path."
+                );
+                return Ok(());
+            }
+            s if s.starts_with('-') => return Err(format!("unknown flag: {s}")),
+            s => {
+                if id.is_none() {
+                    id = Some(s.to_string());
+                } else if file.is_none() {
+                    file = Some(PathBuf::from(s));
+                } else {
+                    return Err("usage: rradar attach <id> <file>".into());
+                }
+            }
+        }
+        i += 1;
+    }
+    let id = id.ok_or("usage: rradar attach <id> <file>")?;
+    let file = file.ok_or("usage: rradar attach <id> <file>")?;
+    let flags = extract_db_from_all(args)?;
+    let (ledger, tmp) = open_db(&flags)?;
+    let _ = ledger.get_transaction(&id).map_err(|e| e.to_string())?;
+    let rel = store_attachment(ledger.path(), &id, &file).map_err(|e| e.to_string())?;
+    let tx = ledger
+        .update_transaction(
+            &id,
+            &TxUpdate {
+                attachment_path: Some(rel.clone()),
+                ..Default::default()
+            },
+        )
+        .map_err(|e| e.to_string())?;
+    println!("attached | {rel}");
+    println!("{}", serde_json::to_string_pretty(&tx).unwrap_or_default());
+    maybe_reseal(&flags, &ledger, tmp)?;
+    Ok(())
+}
+
+/// Clear attachment_path; optionally delete the stored file.
+fn cmd_detach(args: &[String]) -> Result<(), String> {
+    let mut id: Option<String> = None;
+    let mut delete_file = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--delete-file" => delete_file = true,
+            "--help" | "-h" => {
+                println!(
+                    "rradar detach <id> [--delete-file]\n  \
+                     Clear attachment_path; with --delete-file remove local blob too."
+                );
+                return Ok(());
+            }
+            s if s.starts_with('-') => return Err(format!("unknown flag: {s}")),
+            s => {
+                if id.is_none() {
+                    id = Some(s.to_string());
+                } else {
+                    return Err("usage: rradar detach <id> [--delete-file]".into());
+                }
+            }
+        }
+        i += 1;
+    }
+    let id = id.ok_or("usage: rradar detach <id> [--delete-file]")?;
+    let flags = extract_db_from_all(args)?;
+    let (ledger, tmp) = open_db(&flags)?;
+    let existing = ledger.get_transaction(&id).map_err(|e| e.to_string())?;
+    if delete_file {
+        if let Some(ref stored) = existing.attachment_path {
+            remove_stored_attachment(ledger.path(), stored).map_err(|e| e.to_string())?;
+        }
+    }
+    let tx = ledger
+        .update_transaction(
+            &id,
+            &TxUpdate {
+                attachment_path: Some(String::new()),
+                ..Default::default()
+            },
+        )
+        .map_err(|e| e.to_string())?;
+    println!("detached | {id}");
     println!("{}", serde_json::to_string_pretty(&tx).unwrap_or_default());
     maybe_reseal(&flags, &ledger, tmp)?;
     Ok(())
@@ -2015,16 +2216,19 @@ fn cmd_backup(args: &[String]) -> Result<(), String> {
             let info = inspect_backup(&pass, &sealed).map_err(|e| e.to_string())?;
             println!("backup info | {}", input.display());
             println!(
-                "  package_schema={}  ledger_schema={}  txs={}  app={}  created={}",
+                "  package_schema={}  ledger_schema={}  txs={}  attachments={}  app={}  created={}",
                 info.manifest.schema_version,
                 info.manifest.ledger_schema_version,
                 info.manifest.transaction_count,
+                info.manifest
+                    .attachment_count
+                    .max(info.attachment_file_count as u32),
                 info.manifest.app_version,
                 info.manifest.created_at
             );
             println!(
-                "  has_sqlite={}  has_transactions_json={}",
-                info.has_sqlite, info.has_transactions_json
+                "  has_sqlite={}  has_transactions_json={}  attachment_files={}",
+                info.has_sqlite, info.has_transactions_json, info.attachment_file_count
             );
             for f in &info.files {
                 println!("  file | {:>8} B  {}", f.bytes, f.name);
@@ -2055,8 +2259,8 @@ fn cmd_backup(args: &[String]) -> Result<(), String> {
             let sealed = std::fs::read(&input).map_err(|e| e.to_string())?;
             let m = verify_backup(&pass, &sealed).map_err(|e| e.to_string())?;
             println!(
-                "backup verify | OK  txs={}  ledger_schema={}  app={}",
-                m.transaction_count, m.ledger_schema_version, m.app_version
+                "backup verify | OK  txs={}  attachments={}  ledger_schema={}  app={}",
+                m.transaction_count, m.attachment_count, m.ledger_schema_version, m.app_version
             );
             Ok(())
         }
@@ -2100,8 +2304,11 @@ fn cmd_backup(args: &[String]) -> Result<(), String> {
             if let Some(parent) = out.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            std::fs::write(&out, bytes).map_err(|e| e.to_string())?;
-            println!("backup\t{}", out.display());
+            std::fs::write(&out, &bytes).map_err(|e| e.to_string())?;
+            let att_n = inspect_backup(&pass, &bytes)
+                .map(|i| i.attachment_file_count)
+                .unwrap_or(0);
+            println!("backup\t{}\tattachments={att_n}", out.display());
             if let Some(t) = tmp {
                 let _ = std::fs::remove_file(t);
             }
@@ -2151,8 +2358,10 @@ fn cmd_backup(args: &[String]) -> Result<(), String> {
                 let (ins, skip) = ledger
                     .import_transactions(&rows)
                     .map_err(|e| e.to_string())?;
+                let att_n = write_restored_attachments(ledger.path(), &restored)
+                    .map_err(|e| e.to_string())?;
                 println!(
-                    "restored(merge)\tinserted={ins}\tskipped={skip}\t-> {}",
+                    "restored(merge)\tinserted={ins}\tskipped={skip}\tattachments={att_n}\t-> {}",
                     db.display()
                 );
                 if let Some(t) = tmp {
@@ -2161,12 +2370,15 @@ fn cmd_backup(args: &[String]) -> Result<(), String> {
             } else {
                 let sqlite = restored
                     .sqlite_bytes
+                    .as_ref()
                     .ok_or("backup missing ledger.sqlite")?;
-                write_restored_db(&db, &sqlite).map_err(|e| e.to_string())?;
+                write_restored_db(&db, sqlite).map_err(|e| e.to_string())?;
+                let att_n =
+                    write_restored_attachments(&db, &restored).map_err(|e| e.to_string())?;
                 // Open once so migrations apply if restoring older schema snapshot.
                 let ledger = rradar_core::Ledger::open(&db).map_err(|e| e.to_string())?;
                 println!(
-                    "restored\t{} txs\tschema={}\t-> {}",
+                    "restored\t{} txs\tattachments={att_n}\tschema={}\t-> {}",
                     restored.manifest.transaction_count,
                     ledger.schema_version().unwrap_or_default(),
                     db.display()
@@ -2324,6 +2536,8 @@ fn print_topic_help(topic: &str) -> Result<(), String> {
 process <files…> [options]
   Parse receipt text/image (mock OCR by default). Multiple files = batch.
   --confirm, -c     write to ledger (default db)
+  --attach          with --confirm, copy source into {db_dir}/attachments/
+  --tags a,b,c      with --confirm, set free-form tags (schema v3)
   --explain         show amount candidates / rules
   --json --quiet -q
   --engine mock|onnx
@@ -2368,7 +2582,13 @@ backup create -p PASS [-o file] [--db PATH]
 backup restore --in file -p PASS [--db PATH] [--merge]
 backup info|verify --in file -p PASS
   Argon2id + XChaCha20-Poly1305. Local-only multi-device via file copy.
-  --merge inserts missing txs into existing ledger. RRADAR_FAST_BACKUP=1 for tests.",
+  Packs ledger + transactions.json + optional attachments/** blobs.
+  --merge inserts missing txs and rehydrates attachment files.
+  RRADAR_FAST_BACKUP=1 for tests.",
+        "attach" | "detach" => "\
+attach <id> <file>     copy receipt into {db_dir}/attachments/{id}/ and set path
+detach <id> [--delete-file]
+  attachment_path is relative (attachments/…); portable with the data dir.",
         "seal" | "unseal" => "\
 seal [--db ledger.db] -o file.rrsealed -p PASS
 unseal --in file.rrsealed -o ledger.db -p PASS
@@ -2389,12 +2609,12 @@ demo     one-command closed-loop from fixtures/ (recordable)
   RRADAR_HOME / RRADAR_DB / RRADAR_DEFAULT_CURRENCY override defaults.",
         "edit" | "delete" | "show" | "rm" => "\
 show <id>
-edit <id> [--merchant --amount --currency --category --notes --date]
+edit <id> [--merchant --amount --currency --category --notes --date] [--tags T] [--clear-tags]
 delete <id> --yes
   edit/delete require --db for non-default ledgers.",
         other => {
             return Err(format!(
-                "no help topic `{other}` — try: process manual list stats export import backup seal"
+                "no help topic `{other}` — try: process manual list stats export import backup attach seal"
             ));
         }
     };
@@ -2430,7 +2650,9 @@ Commands:
   last                 Show most recently confirmed row (JSON)
   undo --yes           Delete most recently confirmed row
   show <id>            Show one transaction (JSON)
-  edit <id>            Edit merchant/amount/category/notes/date
+  edit <id>            Edit merchant/amount/category/notes/date/tags
+  attach <id> <file>   Store receipt blob next to ledger (schema v3)
+  detach <id>          Clear attachment_path [--delete-file]
   delete <id> --yes    Delete transaction (alias: rm)
   stats                Per-currency totals; --by-category for breakdown
   top                  Top merchants by spend (one currency)
@@ -2452,6 +2674,8 @@ Commands:
 
 process options:
   --confirm, -c        Write to ledger (default db if --db omitted)
+  --attach             Copy source file into attachments/ on confirm
+  --tags a,b           Free-form tags on confirm
   --explain            Show rules / amount candidates
   --json               JSON output
   --engine mock|onnx   OCR backend (default mock; onnx needs --features onnx + models)

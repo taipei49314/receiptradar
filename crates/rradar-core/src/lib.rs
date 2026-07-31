@@ -2,6 +2,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod attachments;
 pub mod category;
 pub mod config;
 pub mod crypto;
@@ -20,13 +21,19 @@ pub mod rules;
 pub mod sealed;
 pub mod types;
 
+pub use attachments::{
+    attachments_root_for_db, collect_attachment_files, ensure_attachments_root, normalize_tags,
+    remove_stored_attachment, resolve_attachment_path, store_attachment, write_attachment_files,
+    AttachmentError,
+};
 pub use category::CategoryEngine;
 pub use config::AppConfig;
 pub use explain::ExplainTrace;
 pub use export::{
     create_backup, create_backup_default_params, inspect_backup, restore_backup,
     transactions_from_backup, transactions_to_csv, transactions_to_json, verify_backup,
-    write_restored_db, BackupFileInfo, BackupInspect, BackupManifest, ExportError, RestoredBackup,
+    write_restored_attachments, write_restored_db, BackupFileInfo, BackupInspect, BackupManifest,
+    ExportError, RestoredBackup,
 };
 pub use handoff::{apply_handoff_merge, create_handoff, inspect_handoff, write_handoff_file};
 pub use ledger::{

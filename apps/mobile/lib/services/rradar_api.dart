@@ -16,6 +16,8 @@ class RradarCapabilities {
     required this.rulePacks,
     required this.localHttpServe,
     required this.tagsAttachments,
+    required this.attachmentStore,
+    required this.backupIncludesAttachments,
     required this.notes,
   });
 
@@ -28,6 +30,8 @@ class RradarCapabilities {
   final bool rulePacks;
   final bool localHttpServe;
   final bool tagsAttachments;
+  final bool attachmentStore;
+  final bool backupIncludesAttachments;
   final String notes;
 
   factory RradarCapabilities.fromJson(Map<String, dynamic> j) {
@@ -41,6 +45,9 @@ class RradarCapabilities {
       rulePacks: j['rule_packs'] as bool? ?? false,
       localHttpServe: j['local_http_serve'] as bool? ?? false,
       tagsAttachments: j['tags_attachments'] as bool? ?? false,
+      attachmentStore: j['attachment_store'] as bool? ?? false,
+      backupIncludesAttachments:
+          j['backup_includes_attachments'] as bool? ?? false,
       notes: j['notes'] as String? ?? '',
     );
   }
@@ -91,6 +98,8 @@ class MockRradarApi implements RradarApi {
       rulePacks: true,
       localHttpServe: true,
       tagsAttachments: true,
+      attachmentStore: true,
+      backupIncludesAttachments: true,
       notes: 'mock api — local-first; multi-device via backup/handoff file only',
     );
   }

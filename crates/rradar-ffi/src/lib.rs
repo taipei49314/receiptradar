@@ -13,10 +13,12 @@
 #![deny(unsafe_code)]
 
 use rradar_core::{
-    apply_handoff_merge, category_engine_with_packs, create_backup, create_handoff, data_dir,
-    default_db_path, ensure_inbox_dir, ensure_rules_dir, inbox_dir, inspect_handoff,
-    list_rule_files, open_ledger_auto, process_bytes, process_path, rules_dir, write_handoff_file,
-    Iso4217, Ledger, ProcessOptions, TxUpdate, LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
+    apply_handoff_merge, attachments_root_for_db, category_engine_with_packs, create_backup,
+    create_handoff, data_dir, default_db_path, ensure_inbox_dir, ensure_rules_dir, inbox_dir,
+    inspect_handoff, list_rule_files, normalize_tags, open_ledger_auto, process_bytes,
+    process_path, remove_stored_attachment, resolve_attachment_path, rules_dir, store_attachment,
+    write_handoff_file, Iso4217, Ledger, ProcessOptions, TxUpdate, LEDGER_SCHEMA_VERSION,
+    PRODUCT_ID, VERSION,
 };
 use rradar_ocr::engine_by_name;
 use serde::Serialize;
@@ -70,6 +72,8 @@ pub fn capabilities_json() -> String {
         rule_packs: bool,
         local_http_serve: bool,
         tags_attachments: bool,
+        attachment_store: bool,
+        backup_includes_attachments: bool,
         notes: &'static str,
     }
     serde_json::to_string(&Caps {
@@ -83,6 +87,8 @@ pub fn capabilities_json() -> String {
         rule_packs: true,
         local_http_serve: true,
         tags_attachments: true,
+        attachment_store: true,
+        backup_includes_attachments: true,
         notes: "local-first; multi-device via backup/handoff file only",
     })
     .unwrap_or_else(|_| "{}".into())
@@ -110,6 +116,20 @@ pub fn ensure_rules() -> Result<String, String> {
     ensure_rules_dir()
         .map(|p| p.display().to_string())
         .map_err(|e| e.to_string())
+}
+
+/// Attachments root next to a ledger (`{db_parent}/attachments`).
+pub fn attachments_dir_for_ledger(db_path: String) -> String {
+    attachments_root_for_db(Path::new(&db_path))
+        .display()
+        .to_string()
+}
+
+/// Default attachments dir for the platform default ledger.
+pub fn default_attachments_path() -> String {
+    attachments_root_for_db(&default_db_path())
+        .display()
+        .to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -300,6 +320,8 @@ pub fn delete_transaction(
 
 /// Patch transaction fields. JSON body: optional merchant, amount_minor, currency,
 /// category, notes, transacted_at, tags, attachment_path. Returns updated transaction JSON.
+///
+/// Empty `tags` / `attachment_path` strings clear those columns.
 pub fn update_transaction_json(
     db_path: String,
     passphrase: Option<String>,
@@ -319,6 +341,7 @@ pub fn update_transaction_json(
     }
     let p: Patch = serde_json::from_str(&patch_json).map_err(|e| e.to_string())?;
     with_ledger(&db_path, passphrase.as_deref(), |ledger| {
+        let tags = p.tags.map(|t| normalize_tags(&t).unwrap_or_default());
         let tx = ledger
             .update_transaction(
                 &id,
@@ -329,7 +352,7 @@ pub fn update_transaction_json(
                     category: p.category,
                     notes: p.notes,
                     transacted_at: p.transacted_at,
-                    tags: p.tags,
+                    tags,
                     attachment_path: p.attachment_path,
                     ..Default::default()
                 },
@@ -337,6 +360,65 @@ pub fn update_transaction_json(
             .map_err(|e| e.to_string())?;
         serde_json::to_string(&tx).map_err(|e| e.to_string())
     })
+}
+
+/// Copy a local file into the ledger attachment store and set `attachment_path`.
+/// Returns updated transaction JSON.
+pub fn attach_file_json(
+    db_path: String,
+    passphrase: Option<String>,
+    id: String,
+    source_path: String,
+) -> Result<String, String> {
+    with_ledger(&db_path, passphrase.as_deref(), |ledger| {
+        let _ = ledger.get_transaction(&id).map_err(|e| e.to_string())?;
+        let rel = store_attachment(ledger.path(), &id, Path::new(&source_path))
+            .map_err(|e| e.to_string())?;
+        let tx = ledger
+            .update_transaction(
+                &id,
+                &TxUpdate {
+                    attachment_path: Some(rel),
+                    ..Default::default()
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        serde_json::to_string(&tx).map_err(|e| e.to_string())
+    })
+}
+
+/// Clear `attachment_path`. When `delete_file` is true, also removes the stored blob.
+pub fn detach_file_json(
+    db_path: String,
+    passphrase: Option<String>,
+    id: String,
+    delete_file: bool,
+) -> Result<String, String> {
+    with_ledger(&db_path, passphrase.as_deref(), |ledger| {
+        let existing = ledger.get_transaction(&id).map_err(|e| e.to_string())?;
+        if delete_file {
+            if let Some(ref stored) = existing.attachment_path {
+                remove_stored_attachment(ledger.path(), stored).map_err(|e| e.to_string())?;
+            }
+        }
+        let tx = ledger
+            .update_transaction(
+                &id,
+                &TxUpdate {
+                    attachment_path: Some(String::new()),
+                    ..Default::default()
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        serde_json::to_string(&tx).map_err(|e| e.to_string())
+    })
+}
+
+/// Resolve a stored attachment path (relative or absolute) to an absolute filesystem path.
+pub fn resolve_attachment_path_string(db_path: String, stored: String) -> String {
+    resolve_attachment_path(Path::new(&db_path), &stored)
+        .display()
+        .to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -582,6 +664,8 @@ mod tests {
         assert!(caps.contains("official_relay"));
         assert!(caps.contains("\"multi_device_handoff\":true"));
         assert!(caps.contains("\"rule_packs\":true"));
+        assert!(caps.contains("\"attachment_store\":true"));
+        assert!(caps.contains("\"backup_includes_attachments\":true"));
         assert!(!categories_json().is_empty());
         let _ = list_rule_packs_json();
         let _ = models_pins_json(String::new()).unwrap_or_default();
@@ -593,6 +677,7 @@ mod tests {
         assert!(default_ledger_path().contains("ledger"));
         assert!(!default_inbox_path().is_empty());
         assert!(!default_rules_path().is_empty());
+        assert!(!default_attachments_path().is_empty());
         let inbox = ensure_inbox().unwrap();
         assert!(Path::new(&inbox).is_dir() || Path::new(&inbox).exists());
     }
@@ -629,6 +714,28 @@ mod tests {
         assert!(last.contains("全家") || last.contains("8900"), "{last}");
         let ver = ledger_schema_version(db.display().to_string(), None).unwrap();
         assert_eq!(ver, "3");
+
+        // Attachment store: copy fixture next to ledger, set tags
+        let id: serde_json::Value = serde_json::from_str(&last).unwrap();
+        let tid = id["id"].as_str().unwrap().to_string();
+        let attached = attach_file_json(
+            db.display().to_string(),
+            None,
+            tid.clone(),
+            root.display().to_string(),
+        )
+        .unwrap();
+        assert!(attached.contains("attachments/"), "{attached}");
+        let patched = update_transaction_json(
+            db.display().to_string(),
+            None,
+            tid.clone(),
+            r#"{"tags":"demo,ffi"}"#.into(),
+        )
+        .unwrap();
+        assert!(patched.contains("demo"), "{patched}");
+        let att_dir = attachments_dir_for_ledger(db.display().to_string());
+        assert!(att_dir.contains("attachments"), "{att_dir}");
 
         // mock image path bytes (LF)
         let mut magic = b"RRADAR_MOCK_OCR\n".to_vec();

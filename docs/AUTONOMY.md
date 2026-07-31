@@ -256,7 +256,31 @@ Tag: v0.1.0-cli.11
 | P2 | FRB generate when Flutter present |
 | P3 | Attachments UX + camera → process_image_bytes_json |
 
+## Cycle 21 — attachment store + backup blobs (main axis #2)
+
+### Plan
+1. Local attachment store next to ledger (`attachments/{tx_id}/…`); relative `attachment_path`
+2. CLI `attach` / `detach`, `process --attach --tags`, `edit --tags`
+3. Backup + handoff pack/restore attachment blobs; manifest `attachment_count`
+4. FFI attach/detach/resolve; docs ledger-schema v3 + backup format; demo step
+
+### Verify
+- `cargo test --workspace --locked` / clippy green  
+- Demo includes attach + backup attachment count  
+
+### Result
+- Schema v3 fields have a real lifecycle and multi-device path (user-mediated file only)  
+- Empty tags/attachment_path on update clears columns  
+
+### Next seeds
+| Priority | Item |
+|----------|------|
+| P1 | CI green + release tag for attachment milestone |
+| P2 | Mobile camera → process_image_bytes + attach (needs Flutter/NDK) |
+| P3 | Optional SQLCipher P1 when NDK available |
+
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
 - Green tests before re-plan  
 - Non-goals: official sync, GPT wrapper  
+

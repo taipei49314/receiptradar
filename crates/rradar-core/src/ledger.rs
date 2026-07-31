@@ -617,10 +617,12 @@ impl Ledger {
             tx.transacted_at = d.clone();
         }
         if let Some(ref t) = u.tags {
-            tx.tags = Some(t.clone());
+            // Empty string clears tags (schema v3 free-form).
+            tx.tags = if t.is_empty() { None } else { Some(t.clone()) };
         }
         if let Some(ref a) = u.attachment_path {
-            tx.attachment_path = Some(a.clone());
+            // Empty string clears attachment_path.
+            tx.attachment_path = if a.is_empty() { None } else { Some(a.clone()) };
         }
         let now = crate::pipeline::utc_now_iso();
         let n = self.conn.execute(
