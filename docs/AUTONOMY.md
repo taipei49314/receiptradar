@@ -302,9 +302,32 @@ Tag: v0.1.0-cli.11
 | P2 | FRB + camera when Flutter/NDK present |
 | P3 | ONNX weekly smoke keep green |
 
+## Cycle 23 — mobile capture one-shot FFI (main axis #3)
+
+### Plan
+1. `store_attachment_bytes` for camera/in-memory frames
+2. FFI `process_confirm_path_json` / `process_confirm_bytes_json` + `attach_bytes_json`
+3. Dart `processConfirmPath` + Capture screen; capabilities `capture_oneshot`
+4. CI `api-smoke` step; docs ffi/android-ffi
+
+### Verify
+- `cargo test -p rradar-ffi` (incl. `capture_oneshot_path_and_bytes`) / workspace / clippy green
+
+### Result
+- Mobile can call one FFI entry for process→confirm→attach without multi-step glue  
+- FRB still deferred (no Flutter SDK on builder); mock shell matches contract  
+
+### Next seeds
+| Priority | Item |
+|----------|------|
+| P1 | FRB generate when Flutter present |
+| P2 | ONNX desktop polish / measured spike fill |
+| P3 | Release notes / install pin to latest cli tag |
+
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
 - Green tests before re-plan  
 - Non-goals: official sync, GPT wrapper  
+
 
 

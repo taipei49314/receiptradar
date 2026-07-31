@@ -50,9 +50,12 @@ cargo build -p rradar-ffi --release
 | `delete_transaction` | Delete |
 | `update_transaction_json` | Edit fields (+ **tags**, **attachment_path**; empty string clears) |
 | `attach_file_json` | Copy local file into `{db}/attachments/{id}/` + set path |
+| `attach_bytes_json` | Store camera/in-memory bytes as attachment |
 | `detach_file_json` | Clear path; optional delete stored blob |
 | `resolve_attachment_path_string` | Relative → absolute next to ledger |
 | `attachments_dir_for_ledger` / `default_attachments_path` | Store roots |
+| **`process_confirm_path_json`** | **Capture one-shot:** path → process → confirm → attach/tags |
+| **`process_confirm_bytes_json`** | **Camera one-shot:** bytes → process → confirm → attach/tags |
 | `stats_all_json` / `stats_month_json` | Totals |
 | `stats_by_category_json` | Category breakdown |
 | `report_month_markdown` | Monthly report |

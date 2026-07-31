@@ -18,6 +18,7 @@ class RradarCapabilities {
     required this.tagsAttachments,
     required this.attachmentStore,
     required this.backupIncludesAttachments,
+    required this.captureOneshot,
     required this.notes,
   });
 
@@ -32,6 +33,7 @@ class RradarCapabilities {
   final bool tagsAttachments;
   final bool attachmentStore;
   final bool backupIncludesAttachments;
+  final bool captureOneshot;
   final String notes;
 
   factory RradarCapabilities.fromJson(Map<String, dynamic> j) {
@@ -48,6 +50,7 @@ class RradarCapabilities {
       attachmentStore: j['attachment_store'] as bool? ?? false,
       backupIncludesAttachments:
           j['backup_includes_attachments'] as bool? ?? false,
+      captureOneshot: j['capture_oneshot'] as bool? ?? false,
       notes: j['notes'] as String? ?? '',
     );
   }
@@ -68,6 +71,17 @@ abstract class RradarApi {
     String currency = 'TWD',
     String engine = 'mock',
     String? qrPayload,
+  });
+
+  /// Capture one-shot: process → confirm → optional attach/tags (FFI contract).
+  Future<String> processConfirmPath({
+    required String dbPath,
+    required String path,
+    bool confirm = true,
+    bool attach = true,
+    String tags = 'capture',
+    String currency = 'TWD',
+    String engine = 'mock',
   });
 
   Future<void> ensureLedger(String dbPath);
@@ -100,6 +114,7 @@ class MockRradarApi implements RradarApi {
       tagsAttachments: true,
       attachmentStore: true,
       backupIncludesAttachments: true,
+      captureOneshot: true,
       notes: 'mock api — local-first; multi-device via backup/handoff file only',
     );
   }
@@ -145,6 +160,34 @@ class MockRradarApi implements RradarApi {
         '"total":{"value":{"amount_minor":8900,"currency":"$currency"}},'
         '"source_path":"ocr","path":"$path","engine":"$engine",'
         '"qr":${qrPayload == null ? 'null' : '"$qrPayload"'}}';
+  }
+
+  @override
+  Future<String> processConfirmPath({
+    required String dbPath,
+    required String path,
+    bool confirm = true,
+    bool attach = true,
+    String tags = 'capture',
+    String currency = 'TWD',
+    String engine = 'mock',
+  }) async {
+    final draft = await processPath(
+      path: path,
+      currency: currency,
+      engine: engine,
+    );
+    if (!confirm) {
+      return '{"draft":$draft,"confirmed":false}';
+    }
+    final id = _tx.isEmpty ? 'mock-1' : _tx.first['id'] as String;
+    if (attach) {
+      _tx.first['attachment_path'] = 'attachments/$id/capture.jpg';
+    }
+    _tx.first['tags'] = tags;
+    return '{"draft":$draft,"confirmed":true,"inserted":true,'
+        '"transaction":{"id":"$id","attachment_path":"${attach ? 'attachments/$id/capture.jpg' : ''}",'
+        '"tags":"$tags","amount_minor":8900,"currency":"$currency"}}';
   }
 
   @override
@@ -226,6 +269,18 @@ class NativeRradarApi implements RradarApi {
     String currency = 'TWD',
     String engine = 'mock',
     String? qrPayload,
+  }) async =>
+      throw _e;
+
+  @override
+  Future<String> processConfirmPath({
+    required String dbPath,
+    required String path,
+    bool confirm = true,
+    bool attach = true,
+    String tags = 'capture',
+    String currency = 'TWD',
+    String engine = 'mock',
   }) async =>
       throw _e;
 

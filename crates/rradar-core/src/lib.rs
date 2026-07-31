@@ -23,8 +23,8 @@ pub mod types;
 
 pub use attachments::{
     attachments_root_for_db, collect_attachment_files, ensure_attachments_root, normalize_tags,
-    remove_stored_attachment, resolve_attachment_path, store_attachment, write_attachment_files,
-    AttachmentError,
+    remove_stored_attachment, resolve_attachment_path, store_attachment, store_attachment_bytes,
+    write_attachment_files, AttachmentError,
 };
 pub use category::CategoryEngine;
 pub use config::AppConfig;

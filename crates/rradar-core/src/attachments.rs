@@ -66,26 +66,47 @@ pub fn store_attachment(
     tx_id: &str,
     source: &Path,
 ) -> Result<String, AttachmentError> {
-    if tx_id.is_empty() || tx_id.contains('/') || tx_id.contains('\\') || tx_id.contains("..") {
-        return Err(AttachmentError::Msg("invalid transaction id".into()));
-    }
     if !source.is_file() {
         return Err(AttachmentError::Msg(format!(
             "not a file: {}",
             source.display()
         )));
     }
-    let root = ensure_attachments_root(db_path)?;
-    let dest_dir = root.join(tx_id);
-    std::fs::create_dir_all(&dest_dir)?;
     let fname = safe_filename(
         source
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("attachment.bin"),
     );
+    let bytes = std::fs::read(source)?;
+    store_attachment_bytes(db_path, tx_id, &fname, &bytes)
+}
+
+/// Write raw bytes into the local store (mobile camera / in-memory capture).
+///
+/// `filename` is sanitized; defaults to `capture.bin` when empty.
+pub fn store_attachment_bytes(
+    db_path: &Path,
+    tx_id: &str,
+    filename: &str,
+    bytes: &[u8],
+) -> Result<String, AttachmentError> {
+    if tx_id.is_empty() || tx_id.contains('/') || tx_id.contains('\\') || tx_id.contains("..") {
+        return Err(AttachmentError::Msg("invalid transaction id".into()));
+    }
+    if bytes.is_empty() {
+        return Err(AttachmentError::Msg("empty attachment bytes".into()));
+    }
+    let root = ensure_attachments_root(db_path)?;
+    let dest_dir = root.join(tx_id);
+    std::fs::create_dir_all(&dest_dir)?;
+    let fname = if filename.trim().is_empty() {
+        "capture.bin".into()
+    } else {
+        safe_filename(filename)
+    };
     let dest = dest_dir.join(&fname);
-    std::fs::copy(source, &dest)?;
+    std::fs::write(&dest, bytes)?;
     Ok(format!("attachments/{tx_id}/{fname}"))
 }
 
@@ -219,10 +240,17 @@ mod tests {
         assert!(abs.is_file());
         assert_eq!(std::fs::read(&abs).unwrap(), b"\x89PNG fake");
 
+        let rel2 = store_attachment_bytes(&db, "tx02", "cam.jpg", b"JPEGDATA").unwrap();
+        assert_eq!(rel2, "attachments/tx02/cam.jpg");
+        assert_eq!(
+            std::fs::read(resolve_attachment_path(&db, &rel2)).unwrap(),
+            b"JPEGDATA"
+        );
+
         let files = collect_attachment_files(&db).unwrap();
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].0, "attachments/tx01/receipt.png");
-        assert_eq!(files[0].1, b"\x89PNG fake");
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().any(|f| f.0 == "attachments/tx01/receipt.png"));
+        assert!(files.iter().any(|f| f.0 == "attachments/tx02/cam.jpg"));
 
         remove_stored_attachment(&db, &rel).unwrap();
         assert!(!abs.is_file());

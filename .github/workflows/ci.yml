@@ -50,6 +50,9 @@ jobs:
       - name: demo closed-loop
         run: cargo run -p rradar-cli --locked -- demo --fixtures fixtures --db target/ci-demo/ledger.db --quiet
 
+      - name: local API smoke
+        run: cargo run -p rradar-cli --locked -- api-smoke --fixtures fixtures --db target/ci-api-smoke/ledger.db
+
       - name: release binary smoke
         shell: bash
         run: |

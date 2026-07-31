@@ -3,9 +3,9 @@ import 'package:flutter/material.dart';
 import '../l10n/strings.dart';
 import '../services/rradar_api.dart';
 
-/// Mock capture → process → confirm closed-loop (FRB/camera later).
+/// Capture → process → confirm → attach closed-loop (mock until FRB/camera).
 ///
-/// Uses [MockRradarApi] so the shell is demoable without NDK/Flutter camera.
+/// Mirrors Rust FFI `process_confirm_path_json` / `process_confirm_bytes_json`.
 class CapturePlaceholder extends StatefulWidget {
   const CapturePlaceholder({
     super.key,
@@ -34,23 +34,27 @@ class _CapturePlaceholderState extends State<CapturePlaceholder> {
     });
     try {
       const mockPath = 'mock://camera/last_frame.jpg';
-      final draft = await _api.processPath(
+      final db = await _api.defaultLedgerPath();
+      await _api.ensureLedger(db);
+      final oneshot = await _api.processConfirmPath(
+        dbPath: db,
         path: mockPath,
+        confirm: true,
+        attach: true,
+        tags: 'capture,mobile',
         currency: 'TWD',
         engine: 'mock',
       );
-      final db = await _api.defaultLedgerPath();
-      await _api.ensureLedger(db);
       final n = await _api.count(db);
       final list = await _api.listJson(db, limit: 3);
       setState(() {
         _result =
-            'Capture closed-loop (mock)\n'
-            '• process → draft ok (${draft.length} chars)\n'
+            'Capture one-shot (mock ↔ FFI process_confirm_*)\n'
+            '• process+confirm+attach ok\n'
+            '• response: ${oneshot.length > 180 ? '${oneshot.substring(0, 180)}…' : oneshot}\n'
             '• ledger rows: $n\n'
             '• recent: $list\n'
-            '• tags/attachments: schema v3 via FFI when native bound\n'
-            'Local-first · no cloud.';
+            'Local-first · no cloud · schema v3 attachments.';
       });
     } catch (e) {
       setState(() => _error = e.toString());
@@ -110,7 +114,7 @@ class _CapturePlaceholderState extends State<CapturePlaceholder> {
             const Spacer(),
             FilledButton(
               onPressed: _busy ? null : _runMockCapture,
-              child: Text(_busy ? '…' : 'Mock snap → process → ledger'),
+              child: Text(_busy ? '…' : 'Mock snap → process+confirm+attach'),
             ),
             const SizedBox(height: 8),
             FilledButton.tonal(

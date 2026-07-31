@@ -57,6 +57,7 @@ class _AboutScreenState extends State<AboutScreen> {
             _row('tags/attachments', '${c.tagsAttachments}'),
             _row('attachment_store', '${c.attachmentStore}'),
             _row('backup+blobs', '${c.backupIncludesAttachments}'),
+            _row('capture_oneshot', '${c.captureOneshot}'),
             _row('local_http', '${c.localHttpServe}'),
             const SizedBox(height: 8),
             Text(c.notes, style: Theme.of(context).textTheme.bodySmall),

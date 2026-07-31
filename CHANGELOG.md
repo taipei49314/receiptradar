@@ -13,7 +13,8 @@
 - Local HTTP API expanded for product demo automation (capabilities, paths, attach, process flags)
 
 ### Added
-- **Local API product smoke:** `rradar api-smoke`; `serve` GET `/capabilities` `/paths` `/transaction`; POST `/process` `{attach,tags}` + POST `/attach`; demo step 12; `watch --attach`
+- **Mobile capture one-shot (FFI):** `process_confirm_path_json` / `process_confirm_bytes_json`; `store_attachment_bytes` / `attach_bytes_json`; Dart `processConfirmPath` + Capture screen; capabilities `capture_oneshot`
+- **Local API product smoke:** `rradar api-smoke`; `serve` GET `/capabilities` `/paths` `/transaction`; POST `/process` `{attach,tags}` + POST `/attach`; demo step 12; `watch --attach`; CI `api-smoke` step
 - Mobile **capture mock closed-loop** (process → ledger via MockRradarApi)
 - **Attachment store (schema v3 lifecycle):** `{db_parent}/attachments/{tx_id}/…` with relative DB paths; `rradar attach` / `detach`; `process --confirm --attach --tags`; backup `attachment_count`; FFI `attach_file_json` / `detach_file_json`
 - **Mobile FFI v3 surface:** handoff create/info/merge, rules/inbox paths, tags/attachment patch, models pins JSON; Dart Ledger/About screens; `docs/android-ffi.md`; optional weekly `onnx-smoke` workflow

@@ -331,6 +331,7 @@ fn handle(mut stream: TcpStream, st: &State) -> Result<(), String> {
                 "tags_attachments": true,
                 "attachment_store": true,
                 "backup_includes_attachments": true,
+                "capture_oneshot": true,
                 "engines": ["mock", "onnx"],
                 "notes": "local-first; multi-device via backup/handoff file only",
             })

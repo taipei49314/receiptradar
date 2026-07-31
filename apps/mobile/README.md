@@ -16,7 +16,7 @@ UI (Dart)  →  RradarApi facade  →  [Mock now | FRB later]  →  rradar-ffi  
 
 - No official cloud sync / relay.
 - Multi-device: encrypted backup / **handoff** files only.
-- Schema **v3**: tags + attachment_path exposed via FFI `update_transaction_json`.
+- Schema **v3**: tags + attachment_path via FFI; **capture one-shot** `process_confirm_*` (path/bytes → confirm → attach).
 
 ## Run (when Flutter is installed)
 

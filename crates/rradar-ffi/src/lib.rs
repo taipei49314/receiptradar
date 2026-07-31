@@ -17,8 +17,8 @@ use rradar_core::{
     create_handoff, data_dir, default_db_path, ensure_inbox_dir, ensure_rules_dir, inbox_dir,
     inspect_handoff, list_rule_files, normalize_tags, open_ledger_auto, process_bytes,
     process_path, remove_stored_attachment, resolve_attachment_path, rules_dir, store_attachment,
-    write_handoff_file, Iso4217, Ledger, ProcessOptions, TxUpdate, LEDGER_SCHEMA_VERSION,
-    PRODUCT_ID, VERSION,
+    store_attachment_bytes, write_handoff_file, Iso4217, Ledger, ProcessOptions, TxUpdate,
+    LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
 };
 use rradar_ocr::engine_by_name;
 use serde::Serialize;
@@ -74,6 +74,7 @@ pub fn capabilities_json() -> String {
         tags_attachments: bool,
         attachment_store: bool,
         backup_includes_attachments: bool,
+        capture_oneshot: bool,
         notes: &'static str,
     }
     serde_json::to_string(&Caps {
@@ -89,6 +90,7 @@ pub fn capabilities_json() -> String {
         tags_attachments: true,
         attachment_store: true,
         backup_includes_attachments: true,
+        capture_oneshot: true,
         notes: "local-first; multi-device via backup/handoff file only",
     })
     .unwrap_or_else(|_| "{}".into())
@@ -237,6 +239,185 @@ pub fn process_image_bytes_json(
     serde_json::to_string(&draft).map_err(|e| e.to_string())
 }
 
+/// **Mobile capture one-shot:** process a filesystem path → confirm → optional attach + tags.
+///
+/// Options JSON keys (all optional except implied defaults):
+/// `currency` (default TWD), `engine` (mock), `qr_payload`, `confirm` (true),
+/// `attach` (false), `tags`, `force` (false), `notes`.
+///
+/// Returns JSON: `{ draft, confirm?, transaction?, inserted? }`.
+pub fn process_confirm_path_json(
+    db_path: String,
+    passphrase: Option<String>,
+    path: String,
+    options_json: String,
+) -> Result<String, String> {
+    let opts = parse_capture_opts(&options_json)?;
+    let eng = engine_by_name(&opts.engine).map_err(|e| e.to_string())?;
+    let cats = category_engine_with_packs();
+    let draft = process_path(
+        Path::new(&path),
+        eng.as_ref(),
+        &cats,
+        ProcessOptions {
+            default_currency: opts.currency,
+            qr_payload: opts.qr_payload.clone(),
+            ..Default::default()
+        },
+    )
+    .map_err(|e| e.to_string())?;
+
+    if !opts.confirm {
+        return Ok(serde_json::json!({ "draft": draft, "confirmed": false }).to_string());
+    }
+
+    let bytes = std::fs::read(&path).unwrap_or_default();
+    let hash = rradar_core::preprocess::content_hash(&bytes);
+    with_ledger(&db_path, passphrase.as_deref(), |ledger| {
+        let res = ledger
+            .confirm_draft(&draft, Some(&hash), opts.notes.as_deref(), opts.force)
+            .map_err(|e| e.to_string())?;
+        let mut tx = res.transaction.clone();
+        if res.inserted {
+            let mut patch = TxUpdate::default();
+            if opts.attach && Path::new(&path).is_file() {
+                if let Ok(rel) = store_attachment(ledger.path(), &tx.id, Path::new(&path)) {
+                    patch.attachment_path = Some(rel);
+                }
+            }
+            if let Some(ref t) = opts.tags {
+                patch.tags = Some(normalize_tags(t).unwrap_or_default());
+            }
+            if patch.attachment_path.is_some() || patch.tags.is_some() {
+                if let Ok(updated) = ledger.update_transaction(&tx.id, &patch) {
+                    tx = updated;
+                }
+            }
+        }
+        Ok(serde_json::json!({
+            "draft": draft,
+            "confirmed": true,
+            "inserted": res.inserted,
+            "dedupe": res.dedupe,
+            "transaction": tx,
+        })
+        .to_string())
+    })
+}
+
+/// **Mobile capture one-shot from camera bytes:** process → confirm → store attachment bytes.
+///
+/// `filename` is used only when `attach` is true (e.g. `capture.jpg`).
+/// Options JSON: same as [`process_confirm_path_json`].
+pub fn process_confirm_bytes_json(
+    db_path: String,
+    passphrase: Option<String>,
+    image_bytes: Vec<u8>,
+    filename: String,
+    options_json: String,
+) -> Result<String, String> {
+    let opts = parse_capture_opts(&options_json)?;
+    let eng = engine_by_name(&opts.engine).map_err(|e| e.to_string())?;
+    let cats = category_engine_with_packs();
+    let draft = process_bytes(
+        &image_bytes,
+        None,
+        eng.as_ref(),
+        &cats,
+        ProcessOptions {
+            default_currency: opts.currency,
+            qr_payload: opts.qr_payload.clone(),
+            ..Default::default()
+        },
+    )
+    .map_err(|e| e.to_string())?;
+
+    if !opts.confirm {
+        return Ok(serde_json::json!({ "draft": draft, "confirmed": false }).to_string());
+    }
+
+    let hash = rradar_core::preprocess::content_hash(&image_bytes);
+    with_ledger(&db_path, passphrase.as_deref(), |ledger| {
+        let res = ledger
+            .confirm_draft(&draft, Some(&hash), opts.notes.as_deref(), opts.force)
+            .map_err(|e| e.to_string())?;
+        let mut tx = res.transaction.clone();
+        if res.inserted {
+            let mut patch = TxUpdate::default();
+            if opts.attach && !image_bytes.is_empty() {
+                let name = if filename.is_empty() {
+                    "capture.bin"
+                } else {
+                    filename.as_str()
+                };
+                if let Ok(rel) = store_attachment_bytes(ledger.path(), &tx.id, name, &image_bytes) {
+                    patch.attachment_path = Some(rel);
+                }
+            }
+            if let Some(ref t) = opts.tags {
+                patch.tags = Some(normalize_tags(t).unwrap_or_default());
+            }
+            if patch.attachment_path.is_some() || patch.tags.is_some() {
+                if let Ok(updated) = ledger.update_transaction(&tx.id, &patch) {
+                    tx = updated;
+                }
+            }
+        }
+        Ok(serde_json::json!({
+            "draft": draft,
+            "confirmed": true,
+            "inserted": res.inserted,
+            "dedupe": res.dedupe,
+            "transaction": tx,
+        })
+        .to_string())
+    })
+}
+
+struct CaptureOpts {
+    currency: Iso4217,
+    engine: String,
+    qr_payload: Option<String>,
+    confirm: bool,
+    attach: bool,
+    tags: Option<String>,
+    force: bool,
+    notes: Option<String>,
+}
+
+fn parse_capture_opts(options_json: &str) -> Result<CaptureOpts, String> {
+    #[derive(serde::Deserialize, Default)]
+    struct Raw {
+        currency: Option<String>,
+        engine: Option<String>,
+        qr_payload: Option<String>,
+        confirm: Option<bool>,
+        attach: Option<bool>,
+        tags: Option<String>,
+        force: Option<bool>,
+        notes: Option<String>,
+    }
+    let raw: Raw = if options_json.trim().is_empty() {
+        Raw::default()
+    } else {
+        serde_json::from_str(options_json).map_err(|e| e.to_string())?
+    };
+    Ok(CaptureOpts {
+        currency: raw
+            .currency
+            .as_deref()
+            .and_then(Iso4217::parse)
+            .unwrap_or(Iso4217::TWD),
+        engine: raw.engine.unwrap_or_else(|| "mock".into()),
+        qr_payload: raw.qr_payload,
+        confirm: raw.confirm.unwrap_or(true),
+        attach: raw.attach.unwrap_or(false),
+        tags: raw.tags,
+        force: raw.force.unwrap_or(false),
+        notes: raw.notes,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Confirm / CRUD
 // ---------------------------------------------------------------------------
@@ -374,6 +555,36 @@ pub fn attach_file_json(
         let _ = ledger.get_transaction(&id).map_err(|e| e.to_string())?;
         let rel = store_attachment(ledger.path(), &id, Path::new(&source_path))
             .map_err(|e| e.to_string())?;
+        let tx = ledger
+            .update_transaction(
+                &id,
+                &TxUpdate {
+                    attachment_path: Some(rel),
+                    ..Default::default()
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        serde_json::to_string(&tx).map_err(|e| e.to_string())
+    })
+}
+
+/// Store in-memory capture bytes as attachment and set `attachment_path`.
+pub fn attach_bytes_json(
+    db_path: String,
+    passphrase: Option<String>,
+    id: String,
+    filename: String,
+    bytes: Vec<u8>,
+) -> Result<String, String> {
+    with_ledger(&db_path, passphrase.as_deref(), |ledger| {
+        let _ = ledger.get_transaction(&id).map_err(|e| e.to_string())?;
+        let name = if filename.is_empty() {
+            "capture.bin"
+        } else {
+            filename.as_str()
+        };
+        let rel =
+            store_attachment_bytes(ledger.path(), &id, name, &bytes).map_err(|e| e.to_string())?;
         let tx = ledger
             .update_transaction(
                 &id,
@@ -666,9 +877,56 @@ mod tests {
         assert!(caps.contains("\"rule_packs\":true"));
         assert!(caps.contains("\"attachment_store\":true"));
         assert!(caps.contains("\"backup_includes_attachments\":true"));
+        assert!(caps.contains("\"capture_oneshot\":true"));
         assert!(!categories_json().is_empty());
         let _ = list_rule_packs_json();
         let _ = models_pins_json(String::new()).unwrap_or_default();
+    }
+
+    #[test]
+    fn capture_oneshot_path_and_bytes() {
+        let root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/text/familymart_89.txt");
+        assert!(root.is_file());
+        let dir = std::env::temp_dir().join(format!("rradar-ffi-cap-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let db = dir.join("ledger.db");
+        ensure_ledger(db.display().to_string()).unwrap();
+
+        let path_out = process_confirm_path_json(
+            db.display().to_string(),
+            None,
+            root.display().to_string(),
+            r#"{"confirm":true,"attach":true,"tags":"capture,path","currency":"TWD"}"#.into(),
+        )
+        .expect("path oneshot");
+        assert!(path_out.contains("\"inserted\":true"), "{path_out}");
+        assert!(path_out.contains("attachments/"), "{path_out}");
+        assert!(
+            path_out.contains("capture") || path_out.contains("path"),
+            "{path_out}"
+        );
+
+        let mut magic = b"RRADAR_MOCK_OCR\n".to_vec();
+        magic.extend_from_slice("相機店\n合計 55\n2024-06-01\n".as_bytes());
+        let bytes_out = process_confirm_bytes_json(
+            db.display().to_string(),
+            None,
+            magic.clone(),
+            "cam.bin".into(),
+            r#"{"confirm":true,"attach":true,"tags":"camera","currency":"TWD"}"#.into(),
+        )
+        .expect("bytes oneshot");
+        assert!(bytes_out.contains("\"inserted\":true"), "{bytes_out}");
+        assert!(bytes_out.contains("attachments/"), "{bytes_out}");
+        assert!(
+            bytes_out.contains("55") || bytes_out.contains("相機"),
+            "{bytes_out}"
+        );
+
+        let n = count_transactions(db.display().to_string(), None).unwrap();
+        assert_eq!(n, 2);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
