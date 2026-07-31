@@ -42,7 +42,7 @@ impl CategoryEngine {
         raw_text: &str,
         explain: &mut ExplainTrace,
     ) -> Field<String> {
-        let norm = normalize(merchant);
+        let norm = normalize_key(merchant);
         for m in &self.merchants {
             if norm.contains(&m.key) || m.key.contains(&norm) && !norm.is_empty() {
                 explain.matched_keywords.push(m.key.clone());
@@ -54,7 +54,7 @@ impl CategoryEngine {
             }
         }
         // scan full text for merchant keys
-        let blob = normalize(&format!("{merchant}\n{raw_text}"));
+        let blob = normalize_key(&format!("{merchant}\n{raw_text}"));
         for m in &self.merchants {
             if blob.contains(&m.key) {
                 explain.matched_keywords.push(m.key.clone());
@@ -81,7 +81,7 @@ impl CategoryEngine {
     }
 }
 
-fn normalize(s: &str) -> String {
+pub fn normalize_key(s: &str) -> String {
     s.chars()
         .map(|c| match c {
             'Ａ'..='Ｚ' => char::from_u32(c as u32 - 'Ａ' as u32 + 'A' as u32).unwrap_or(c),
@@ -97,7 +97,7 @@ fn normalize(s: &str) -> String {
 
 fn entry(key: &str, display: &str, category: &str) -> MerchantEntry {
     MerchantEntry {
-        key: normalize(key),
+        key: normalize_key(key),
         display: display.into(),
         category: category.into(),
     }

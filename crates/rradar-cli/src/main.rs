@@ -3,11 +3,13 @@
 mod serve;
 
 use rradar_core::{
-    apply_edits, create_backup, data_dir, default_db_path, ensure_data_dir, ensure_inbox_dir,
-    inbox_dir, inspect_backup, monthly_markdown, open_ledger_auto, process_path, restore_backup,
-    save_sealed, transactions_from_backup, transactions_to_csv, transactions_to_json,
-    verify_backup, write_restored_db, AppConfig, CategoryEngine, Iso4217, Money, ProcessOptions,
-    ReceiptDraft, Transaction, TxUpdate, UserEdits, LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
+    apply_edits, apply_handoff_merge, category_engine_with_packs, create_backup, create_handoff,
+    data_dir, default_db_path, ensure_data_dir, ensure_inbox_dir, ensure_rules_dir, inbox_dir,
+    inspect_backup, inspect_handoff, install_rule_pack, list_rule_files, monthly_markdown,
+    open_ledger_auto, process_path, restore_backup, rules_dir, save_sealed,
+    transactions_from_backup, transactions_to_csv, transactions_to_json, verify_backup,
+    write_handoff_file, write_restored_db, AppConfig, Iso4217, Money, ProcessOptions, ReceiptDraft,
+    Transaction, TxUpdate, UserEdits, LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
 };
 use rradar_ocr::engine_by_name;
 use std::env;
@@ -52,6 +54,8 @@ fn main() -> ExitCode {
         "recategorize" => cmd_recategorize(&args[1..]),
         "clear" => cmd_clear(&args[1..]),
         "categories" | "cats" => cmd_categories(),
+        "rules" => cmd_rules(&args[1..]),
+        "handoff" => cmd_handoff(&args[1..]),
         "export" => cmd_export(&args[1..]),
         "backup" => cmd_backup(&args[1..]),
         "migrate" => cmd_migrate(&args[1..]),
@@ -319,7 +323,7 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
     }
     let ledger = rradar_core::Ledger::open(&demo_db).map_err(|e| e.to_string())?;
     let eng = engine_by_name("mock").map_err(|e| e.to_string())?;
-    let categories = CategoryEngine::with_seed();
+    let categories = category_engine_with_packs();
 
     if !quiet {
         println!("══════════════════════════════════════════════");
@@ -721,7 +725,7 @@ fn cmd_process(args: &[String]) -> Result<(), String> {
     }
 
     let eng = engine_by_name(&engine).map_err(|e| e.to_string())?;
-    let categories = CategoryEngine::with_seed();
+    let categories = category_engine_with_packs();
     let opts_base = ProcessOptions {
         default_currency: currency,
         qr_payload: qr,
@@ -863,7 +867,7 @@ fn cmd_manual(args: &[String]) -> Result<(), String> {
         let iso = rradar_core::utc_now_iso();
         iso.get(..10).unwrap_or("1970-01-01").to_string()
     });
-    let cats = CategoryEngine::with_seed();
+    let cats = category_engine_with_packs();
     let mut ex = rradar_core::ExplainTrace::new("manual", "manual");
     let cat_field = if category == "other" || category.is_empty() {
         cats.categorize(&merchant, "", &mut ex)
@@ -1183,7 +1187,7 @@ fn cmd_recategorize(args: &[String]) -> Result<(), String> {
     let only_other = !args.iter().any(|a| a == "--all");
     let flags = extract_db_from_all(args)?;
     let (ledger, tmp) = open_db(&flags)?;
-    let eng = CategoryEngine::with_seed();
+    let eng = category_engine_with_packs();
     let n = ledger
         .recategorize_all(&eng, only_other)
         .map_err(|e| e.to_string())?;
@@ -1743,6 +1747,144 @@ fn cmd_categories() -> Result<(), String> {
     Ok(())
 }
 
+fn cmd_rules(args: &[String]) -> Result<(), String> {
+    if args.is_empty() || args[0] == "list" {
+        let _ = ensure_rules_dir();
+        println!("rules_dir | {}", rules_dir().display());
+        for p in list_rule_files() {
+            println!("file | {}", p.display());
+        }
+        let eng = category_engine_with_packs();
+        println!("merchants_loaded | {}", eng.merchant_count());
+        return Ok(());
+    }
+    if args[0] == "install" {
+        let src = args
+            .get(1)
+            .ok_or("usage: rradar rules install <file.yml>")?;
+        let dest = install_rule_pack(Path::new(src), None).map_err(|e| e.to_string())?;
+        println!("installed | {}", dest.display());
+        return Ok(());
+    }
+    if args[0] == "ensure" {
+        let d = ensure_rules_dir().map_err(|e| e.to_string())?;
+        println!("rules_dir | {}", d.display());
+        return Ok(());
+    }
+    Err("usage: rradar rules [list|ensure|install <file>]".into())
+}
+
+fn cmd_handoff(args: &[String]) -> Result<(), String> {
+    if args.is_empty() {
+        return Err(
+            "usage: rradar handoff create -p PASS -o file.rrhandoff [--device LABEL]\n       rradar handoff info -p PASS --in file\n       rradar handoff apply -p PASS --in file [--merge]"
+                .into(),
+        );
+    }
+    match args[0].as_str() {
+        "create" => {
+            let mut pass = None;
+            let mut out = None;
+            let mut device = "device".to_string();
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--passphrase" | "-p" => {
+                        i += 1;
+                        pass = Some(args.get(i).ok_or("needs pass")?.clone());
+                    }
+                    "-o" | "--output" => {
+                        i += 1;
+                        out = Some(PathBuf::from(args.get(i).ok_or("needs path")?));
+                    }
+                    "--device" => {
+                        i += 1;
+                        device = args.get(i).ok_or("needs label")?.clone();
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            let pass = pass.ok_or("--passphrase required")?;
+            let out = out.unwrap_or_else(|| {
+                data_dir().join(format!(
+                    "handoff-{}.rrhandoff",
+                    rradar_core::utc_now_iso()
+                        .replace(':', "")
+                        .replace('T', "-")
+                ))
+            });
+            let flags = extract_db_from_all(args)?;
+            let (ledger, tmp) = open_db(&flags)?;
+            let bytes = create_handoff(&ledger, &pass, &device).map_err(|e| e.to_string())?;
+            write_handoff_file(&out, &bytes).map_err(|e| e.to_string())?;
+            println!("handoff | {}", out.display());
+            if let Some(t) = tmp {
+                let _ = std::fs::remove_file(t);
+            }
+            Ok(())
+        }
+        "info" => {
+            let mut pass = None;
+            let mut input = None;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--passphrase" | "-p" => {
+                        i += 1;
+                        pass = Some(args.get(i).ok_or("needs pass")?.clone());
+                    }
+                    "--in" | "-i" => {
+                        i += 1;
+                        input = Some(PathBuf::from(args.get(i).ok_or("needs path")?));
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            let pass = pass.ok_or("--passphrase required")?;
+            let input = input.ok_or("--in required")?;
+            let sealed = std::fs::read(input).map_err(|e| e.to_string())?;
+            let man = inspect_handoff(&pass, &sealed).map_err(|e| e.to_string())?;
+            println!("{}", serde_json::to_string_pretty(&man).unwrap_or_default());
+            Ok(())
+        }
+        "apply" => {
+            let mut pass = None;
+            let mut input = None;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--passphrase" | "-p" => {
+                        i += 1;
+                        pass = Some(args.get(i).ok_or("needs pass")?.clone());
+                    }
+                    "--in" | "-i" => {
+                        i += 1;
+                        input = Some(PathBuf::from(args.get(i).ok_or("needs path")?));
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            let pass = pass.ok_or("--passphrase required")?;
+            let input = input.ok_or("--in required")?;
+            let sealed = std::fs::read(input).map_err(|e| e.to_string())?;
+            let flags = extract_db_from_all(args)?;
+            let (ledger, tmp) = open_db(&flags)?;
+            let (ins, skip, man) =
+                apply_handoff_merge(&pass, &sealed, &ledger).map_err(|e| e.to_string())?;
+            println!(
+                "handoff_apply | from={} | inserted={ins} skipped={skip} | schema={}",
+                man.device_label, man.schema_version
+            );
+            maybe_reseal(&flags, &ledger, tmp)?;
+            Ok(())
+        }
+        other => Err(format!("unknown handoff subcommand {other}")),
+    }
+}
+
 fn cmd_export(args: &[String]) -> Result<(), String> {
     if args.is_empty() {
         return Err("usage: rradar export <csv|json> [-o file] [--year Y --month M]".into());
@@ -2263,6 +2405,8 @@ Commands:
   recategorize         Re-run category rules (default: only `other`)
   clear --yes          Wipe all transactions
   categories           List category ids
+  rules                Merchant rule packs (list|install|ensure)
+  handoff              Multi-device encrypted package (create|info|apply)
   export csv|json      Export ledger
   backup create|restore|info|verify
   import json|backup   Import JSON array or merge from .rradar

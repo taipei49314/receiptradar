@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 /// Latest ledger schema this binary knows how to open and migrate **to**.
-pub const LEDGER_SCHEMA_VERSION: u32 = 2;
+pub const LEDGER_SCHEMA_VERSION: u32 = 3;
 
 const SCHEMA_BASE: &str = r#"
 PRAGMA journal_mode=WAL;
@@ -76,6 +76,12 @@ pub struct Transaction {
     pub overall_confidence: f32,
     pub content_hash: Option<String>,
     pub notes: Option<String>,
+    /// Comma-separated free tags (schema v3+).
+    #[serde(default)]
+    pub tags: Option<String>,
+    /// Optional path to receipt image/file on device (schema v3+).
+    #[serde(default)]
+    pub attachment_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -129,6 +135,8 @@ pub struct TxUpdate {
     pub category: Option<String>,
     pub notes: Option<String>,
     pub transacted_at: Option<String>,
+    pub tags: Option<String>,
+    pub attachment_path: Option<String>,
 }
 
 pub struct Ledger {
@@ -192,6 +200,7 @@ impl Ledger {
             let next = ver + 1;
             match next {
                 2 => self.migrate_v1_to_v2()?,
+                3 => self.migrate_v2_to_v3()?,
                 other => {
                     return Err(LedgerError::Migration {
                         to: other,
@@ -227,6 +236,33 @@ impl Ledger {
         self.meta_set("schema_version", "2")?;
         self.meta_set("app_version", VERSION)?;
         self.meta_set("migrated_to_2_at", &crate::pipeline::utc_now_iso())?;
+        Ok(())
+    }
+
+    /// v3: free-form tags + optional attachment path for receipt files.
+    fn migrate_v2_to_v3(&mut self) -> Result<(), LedgerError> {
+        if !self.column_exists("transactions", "tags")? {
+            self.conn
+                .execute("ALTER TABLE transactions ADD COLUMN tags TEXT", [])
+                .map_err(|e| LedgerError::Migration {
+                    to: 3,
+                    detail: e.to_string(),
+                })?;
+        }
+        if !self.column_exists("transactions", "attachment_path")? {
+            self.conn
+                .execute(
+                    "ALTER TABLE transactions ADD COLUMN attachment_path TEXT",
+                    [],
+                )
+                .map_err(|e| LedgerError::Migration {
+                    to: 3,
+                    detail: e.to_string(),
+                })?;
+        }
+        self.meta_set("schema_version", "3")?;
+        self.meta_set("app_version", VERSION)?;
+        self.meta_set("migrated_to_3_at", &crate::pipeline::utc_now_iso())?;
         Ok(())
     }
 
@@ -320,8 +356,8 @@ impl Ledger {
             r#"INSERT INTO transactions(
                 id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
                 category, invoice_id, source_path, overall_confidence, content_hash, notes, raw_text, draft_json,
-                updated_at
-            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)"#,
+                updated_at, tags, attachment_path
+            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)"#,
             params![
                 id,
                 confirmed_at,
@@ -339,6 +375,8 @@ impl Ledger {
                 draft.raw_text,
                 draft_json,
                 confirmed_at,
+                Option::<String>::None,
+                Option::<String>::None,
             ],
         )?;
 
@@ -421,7 +459,8 @@ impl Ledger {
         self.conn
             .query_row(
                 r#"SELECT id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
-                          category, invoice_id, source_path, overall_confidence, content_hash, notes
+                          category, invoice_id, source_path, overall_confidence, content_hash, notes,
+                          tags, attachment_path
                    FROM transactions WHERE id = ?1"#,
                 params![id],
                 row_to_tx,
@@ -439,7 +478,8 @@ impl Ledger {
     ) -> Result<Vec<Transaction>, LedgerError> {
         let mut stmt = self.conn.prepare(
             r#"SELECT id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
-                      category, invoice_id, source_path, overall_confidence, content_hash, notes
+                      category, invoice_id, source_path, overall_confidence, content_hash, notes,
+                      tags, attachment_path
                FROM transactions
                ORDER BY transacted_at DESC, confirmed_at DESC
                LIMIT ?1 OFFSET ?2"#,
@@ -507,8 +547,8 @@ impl Ledger {
             r#"INSERT INTO transactions(
                 id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
                 category, invoice_id, source_path, overall_confidence, content_hash, notes, raw_text, draft_json,
-                updated_at
-            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)"#,
+                updated_at, tags, attachment_path
+            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)"#,
             params![
                 tx.id,
                 tx.confirmed_at,
@@ -526,6 +566,8 @@ impl Ledger {
                 Option::<String>::None,
                 Option::<String>::None,
                 updated,
+                tx.tags,
+                tx.attachment_path,
             ],
         )?;
         Ok(())
@@ -574,6 +616,12 @@ impl Ledger {
         if let Some(ref d) = u.transacted_at {
             tx.transacted_at = d.clone();
         }
+        if let Some(ref t) = u.tags {
+            tx.tags = Some(t.clone());
+        }
+        if let Some(ref a) = u.attachment_path {
+            tx.attachment_path = Some(a.clone());
+        }
         let now = crate::pipeline::utc_now_iso();
         let n = self.conn.execute(
             r#"UPDATE transactions SET
@@ -584,7 +632,9 @@ impl Ledger {
                 category = ?6,
                 notes = ?7,
                 transacted_at = ?8,
-                updated_at = ?9
+                updated_at = ?9,
+                tags = ?10,
+                attachment_path = ?11
                WHERE id = ?1"#,
             params![
                 id,
@@ -596,6 +646,8 @@ impl Ledger {
                 tx.notes,
                 tx.transacted_at,
                 now,
+                tx.tags,
+                tx.attachment_path,
             ],
         )?;
         if n == 0 {
@@ -619,7 +671,8 @@ impl Ledger {
             (Some(c), None) => {
                 let mut stmt = self.conn.prepare(
                     r#"SELECT id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
-                              category, invoice_id, source_path, overall_confidence, content_hash, notes
+                              category, invoice_id, source_path, overall_confidence, content_hash, notes,
+                              tags, attachment_path
                        FROM transactions WHERE currency = ?1
                        ORDER BY transacted_at DESC, confirmed_at DESC LIMIT ?2 OFFSET ?3"#,
                 )?;
@@ -630,7 +683,8 @@ impl Ledger {
                 let pat = format!("%{q}%");
                 let mut stmt = self.conn.prepare(
                     r#"SELECT id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
-                              category, invoice_id, source_path, overall_confidence, content_hash, notes
+                              category, invoice_id, source_path, overall_confidence, content_hash, notes,
+                              tags, attachment_path
                        FROM transactions
                        WHERE merchant LIKE ?1 OR category LIKE ?1 OR IFNULL(notes,'') LIKE ?1
                        ORDER BY transacted_at DESC, confirmed_at DESC LIMIT ?2 OFFSET ?3"#,
@@ -642,7 +696,8 @@ impl Ledger {
                 let pat = format!("%{q}%");
                 let mut stmt = self.conn.prepare(
                     r#"SELECT id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
-                              category, invoice_id, source_path, overall_confidence, content_hash, notes
+                              category, invoice_id, source_path, overall_confidence, content_hash, notes,
+                              tags, attachment_path
                        FROM transactions
                        WHERE currency = ?1
                          AND (merchant LIKE ?2 OR category LIKE ?2 OR IFNULL(notes,'') LIKE ?2)
@@ -768,7 +823,8 @@ impl Ledger {
             .conn
             .query_row(
                 r#"SELECT id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
-                          category, invoice_id, source_path, overall_confidence, content_hash, notes
+                          category, invoice_id, source_path, overall_confidence, content_hash, notes,
+                          tags, attachment_path
                    FROM transactions
                    ORDER BY confirmed_at DESC, id DESC
                    LIMIT 1"#,
@@ -788,7 +844,8 @@ impl Ledger {
         let prefix = format!("{year:04}-{month:02}");
         let mut stmt = self.conn.prepare(
             r#"SELECT id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
-                      category, invoice_id, source_path, overall_confidence, content_hash, notes
+                      category, invoice_id, source_path, overall_confidence, content_hash, notes,
+                      tags, attachment_path
                FROM transactions
                WHERE substr(transacted_at,1,7) = ?1
                ORDER BY transacted_at DESC, confirmed_at DESC
@@ -879,6 +936,8 @@ fn row_to_tx(r: &rusqlite::Row<'_>) -> rusqlite::Result<Transaction> {
         overall_confidence: r.get::<_, f64>(10)? as f32,
         content_hash: r.get(11)?,
         notes: r.get(12)?,
+        tags: r.get(13).ok().flatten(),
+        attachment_path: r.get(14).ok().flatten(),
     })
 }
 

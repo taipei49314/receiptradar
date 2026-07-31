@@ -222,3 +222,11 @@ Product analytics + inbox automation + FFI analytics surface
 - No questions between cycles unless secrets / destructive remote  
 - Green tests before re-plan  
 - Non-goals: official sync, GPT wrapper  
+
+## Three big loops (user request 2026-07-31)
+
+1. **Schema v3** — tags + attachment_path columns, forward migration
+2. **Rule packs** — `data_dir/rules/*.yml` + `rradar rules` + categorizer merge
+3. **Handoff** — encrypted multi-device package create/info/apply (no cloud)
+
+Tag: v0.1.0-cli.11

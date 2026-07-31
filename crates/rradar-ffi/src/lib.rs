@@ -13,9 +13,9 @@
 #![deny(unsafe_code)]
 
 use rradar_core::{
-    create_backup, data_dir, default_db_path, open_ledger_auto, process_bytes, process_path,
-    CategoryEngine, Iso4217, Ledger, ProcessOptions, TxUpdate, LEDGER_SCHEMA_VERSION, PRODUCT_ID,
-    VERSION,
+    category_engine_with_packs, create_backup, data_dir, default_db_path, open_ledger_auto,
+    process_bytes, process_path, Iso4217, Ledger, ProcessOptions, TxUpdate, LEDGER_SCHEMA_VERSION,
+    PRODUCT_ID, VERSION,
 };
 use rradar_ocr::engine_by_name;
 use serde::Serialize;
@@ -142,7 +142,7 @@ pub fn process_receipt_path_json_ex(
     qr_payload: Option<String>,
 ) -> Result<String, String> {
     let eng = engine_by_name(&engine).map_err(|e| e.to_string())?;
-    let cats = CategoryEngine::with_seed();
+    let cats = category_engine_with_packs();
     let cur = Iso4217::parse(&currency).unwrap_or(Iso4217::TWD);
     let draft = process_path(
         Path::new(&path),
@@ -167,7 +167,7 @@ pub fn process_image_bytes_json(
     qr_payload: Option<String>,
 ) -> Result<String, String> {
     let eng = engine_by_name(&engine).map_err(|e| e.to_string())?;
-    let cats = CategoryEngine::with_seed();
+    let cats = category_engine_with_packs();
     let cur = Iso4217::parse(&currency).unwrap_or(Iso4217::TWD);
     let draft = process_bytes(
         &image_bytes,
@@ -392,7 +392,7 @@ pub fn top_merchants_json(
 
 /// Built-in category id list as JSON string array.
 pub fn categories_json() -> String {
-    let cats = CategoryEngine::with_seed();
+    let cats = category_engine_with_packs();
     // CategoryEngine may not expose ids — use fixed taxonomy from design.
     let ids = [
         "food_dining",
@@ -493,7 +493,7 @@ mod tests {
         let last = last_transaction_json(db.display().to_string(), None).unwrap();
         assert!(last.contains("全家") || last.contains("8900"), "{last}");
         let ver = ledger_schema_version(db.display().to_string(), None).unwrap();
-        assert_eq!(ver, "2");
+        assert_eq!(ver, "3");
 
         // mock image path bytes (LF)
         let mut magic = b"RRADAR_MOCK_OCR\n".to_vec();

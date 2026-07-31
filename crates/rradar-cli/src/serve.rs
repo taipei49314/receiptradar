@@ -1,8 +1,8 @@
 //! Local-only HTTP API (loopback bind only). No cloud relay, no remote listen.
 
 use rradar_core::{
-    monthly_markdown, open_ledger_auto, process_path, CategoryEngine, Iso4217, ProcessOptions,
-    PRODUCT_ID, VERSION,
+    category_engine_with_packs, monthly_markdown, open_ledger_auto, process_path, Iso4217,
+    ProcessOptions, PRODUCT_ID, VERSION,
 };
 use rradar_ocr::engine_by_name;
 use std::io::{Read, Write};
@@ -241,7 +241,7 @@ fn process_post(body: &str, st: &State) -> Result<String, String> {
     let req: Req = serde_json::from_str(body.trim()).map_err(|e| e.to_string())?;
     let eng_name = req.engine.as_deref().unwrap_or("mock");
     let eng = engine_by_name(eng_name).map_err(|e| e.to_string())?;
-    let cats = CategoryEngine::with_seed();
+    let cats = category_engine_with_packs();
     let currency = req
         .currency
         .as_deref()
