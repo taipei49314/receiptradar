@@ -38,14 +38,19 @@ Record date / machine / rustc:
 
 ## zh-TW model pack comparison
 
-Require ≥2 packs on zh-TW-labeled subset before A05 pin.
+Require ≥2 packs on zh-TW-labeled subset before **device** A04 Green; desktop pin frozen for CLI path.
 
-| Pack artifact | SHA-256 | Size | zh-TW total exact | Notes |
-|---------------|---------|------|-------------------|-------|
-| | | | | |
+| Pack artifact | SHA-256 (full in `models/manifest.sha256`) | Size | zh-TW total exact | Notes |
+|---------------|--------------------------------------------|------|-------------------|-------|
+| ch_PP-OCRv4_det_infer.onnx | d2a7720d45a5…f49da9 | ~4.5 MiB | TBD (device) | HF SWHL/RapidOCR PP-OCRv4 |
+| ch_PP-OCRv4_rec_infer.onnx | 48fc40f24f6d…3683b | ~10 MiB | TBD (device) | Simplified-primary rec |
+| ch_ppocr_mobile_v2.0_cls_infer.onnx | e47acedf6632…6215c | ~0.7 MiB | n/a | Angle cls (PP-OCRv1) |
+
+**Desktop A05 pin:** frozen 2026-07-31 in `models/manifest.sha256` + `rradar models verify`.  
+**Device A04 color gate:** still pending (mock baseline only).
 
 ## Decision log
 
-- [ ] Color gate recorded
-- [ ] A05 model name + hash frozen in `models/README.md`
-- [ ] Marketing latency remains “seconds, on-device” until measured
+- [ ] Color gate recorded (device)
+- [x] A05 desktop model name + hash frozen in `models/README.md` / `manifest.sha256`
+- [x] Marketing latency remains “seconds, on-device” until measured

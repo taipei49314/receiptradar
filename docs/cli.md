@@ -91,7 +91,12 @@ rradar process any.txt --qr-file fixtures/qr/tw_einvoice_sample_01.payload.txt -
 | Engine | Status |
 |--------|--------|
 | `mock` (default) | Deterministic / fixtures; CI-safe |
-| `onnx` | Real RapidOCR: build with `--features onnx`, fetch models + ORT (`tools/fetch-models.ps1 -FetchOrt`), then `--engine onnx` |
+| `onnx` | Real RapidOCR: build with `--features onnx`, fetch models + ORT (`tools/fetch-models.ps1 -FetchOrt`), `rradar models verify`, then `--engine onnx` |
+
+```bash
+rradar models status
+rradar models verify   # requires weights matching models/manifest.sha256
+```
 
 ```powershell
 powershell -File tools/fetch-models.ps1 -FetchOrt

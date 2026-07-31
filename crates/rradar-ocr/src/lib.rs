@@ -4,11 +4,16 @@
 
 #![deny(unsafe_code)]
 
+pub mod manifest;
 pub mod onnx;
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+pub use manifest::{
+    all_pins_ok, default_models_dir, file_sha256_hex, load_pins, parse_manifest, verify_models_dir,
+    ModelPin, PinCheck,
+};
 pub use onnx::{
     auto_ort_dylib, ensure_ort_dylib_env, onnx_feature_enabled, OnnxConfig, OnnxOcrEngine,
 };

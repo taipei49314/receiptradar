@@ -161,12 +161,28 @@
 ### Result
 - Windows CI should pass mock OCR fixtures; demo/matrix stay reliable  
 
+## Cycle 17 — ONNX model hash pin (main axis #1)
+
+### Plan
+1. Trusted download of SWHL/RapidOCR det/rec/cls; freeze `models/manifest.sha256`
+2. `rradar-ocr` manifest parse/verify (sha2); doctor pin summary
+3. CLI `rradar models status|verify|pins`; fetch-models `-WritePins`
+4. Docs: models/README pin table, spike A05 check, licenses pin note
+
+### Verify
+- `cargo test --workspace --locked` / clippy green  
+- Local `rradar models verify` green when weights present  
+
+### Result
+- Desktop A05 artifact names + SHA-256 frozen; CI stays mock-only (weights gitignored)  
+- CI windows green confirmed on prior cycle  
+
 ### Next seeds
 | Priority | Item |
 |----------|------|
-| P1 | Confirm Actions green after this push |
+| P1 | Keep CI green |
 | P2 | FRB when Flutter present |
-| P3 | ONNX hash pin after trusted model download |
+| P3 | Device A04 measurements / e2e image fixture with optional onnx nightly |
 
 ## Rules
 - No questions between cycles unless secrets / destructive remote  

@@ -49,6 +49,7 @@ fn main() -> ExitCode {
         "export" => cmd_export(&args[1..]),
         "backup" => cmd_backup(&args[1..]),
         "migrate" => cmd_migrate(&args[1..]),
+        "models" => cmd_models(&args[1..]),
         "seal" => cmd_seal(&args[1..]),
         "unseal" => cmd_unseal(&args[1..]),
         "path" => {
@@ -906,6 +907,73 @@ fn cmd_import(args: &[String]) -> Result<(), String> {
         other => Err(format!(
             "unknown import type `{other}` — try: import json | import backup"
         )),
+    }
+}
+
+/// ONNX model pack status / hash verification (`models/manifest.sha256`).
+fn cmd_models(args: &[String]) -> Result<(), String> {
+    let mut sub = "status";
+    let mut dir = rradar_ocr::default_models_dir();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "status" | "verify" | "pins" => sub = args[i].as_str(),
+            "--dir" => {
+                i += 1;
+                dir = PathBuf::from(args.get(i).ok_or("--dir needs path")?);
+            }
+            other if other.starts_with('-') => {
+                return Err(format!("unknown models flag `{other}`"));
+            }
+            other => {
+                return Err(format!(
+                    "unknown models subcommand `{other}` — try status|verify|pins"
+                ));
+            }
+        }
+        i += 1;
+    }
+
+    println!("models | dir={}", dir.display());
+    let cfg = rradar_ocr::OnnxConfig::from_models_dir(&dir);
+    // Path / feature / ORT lines only (pins printed from verify_models_dir).
+    for line in cfg.status_lines() {
+        if line.contains("model pins:")
+            || line.contains("pin ok")
+            || line.contains("pin MISS")
+            || line.contains("pin BAD")
+        {
+            continue;
+        }
+        println!("{line}");
+    }
+
+    let require = sub == "verify";
+    let checks = rradar_ocr::verify_models_dir(&dir, require).map_err(|e| e.to_string())?;
+    if checks.is_empty() {
+        println!("models | no pins in manifest.sha256");
+        if require {
+            return Err("verify requires pin lines in models/manifest.sha256".into());
+        }
+        return Ok(());
+    }
+    for c in &checks {
+        println!("{}", c.summary_line());
+    }
+    let ok_n = checks.iter().filter(|c| c.is_ok()).count();
+    if sub == "verify" {
+        if rradar_ocr::all_pins_ok(&checks) {
+            println!("models verify | OK ({ok_n} files)");
+            Ok(())
+        } else {
+            Err("models verify failed — run tools/fetch-models.ps1 or tools/fetch-models.sh".into())
+        }
+    } else {
+        println!(
+            "models | {ok_n}/{} pins ok  (rradar models verify)",
+            checks.len()
+        );
+        Ok(())
     }
 }
 
@@ -1817,6 +1885,12 @@ import backup --in file.rradar -p PASS [--db PATH]
         "migrate" => "\
 migrate [--db PATH]
   Open ledger, apply schema migrations, print version and count.",
+        "models" => "\
+models [status|verify|pins] [--dir models]
+  status/pins  show det/rec/cls paths + SHA-256 pin checks (manifest.sha256)
+  verify       exit 1 unless every pin file is present and hashes match
+  Fetch weights: tools/fetch-models.ps1 | tools/fetch-models.sh
+  Pins are committed; .onnx weights are not (see models/README.md).",
         "backup" => "\
 backup create -p PASS [-o file] [--db PATH]
 backup restore --in file -p PASS [--db PATH] [--merge]
@@ -1895,6 +1969,7 @@ Commands:
   backup create|restore|info|verify
   import json|backup   Import JSON array or merge from .rradar
   migrate              Apply/report ledger schema migrations
+  models               ONNX pack status / SHA-256 pin verify
   seal / unseal        Whole-file encryption (.rrsealed)
 
 process options:

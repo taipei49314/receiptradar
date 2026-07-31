@@ -3,11 +3,13 @@
 # Usage:
 #   powershell -File tools/fetch-models.ps1
 #   powershell -File tools/fetch-models.ps1 -FetchOrt
+#   powershell -File tools/fetch-models.ps1 -WritePins
 # Env:
 #   RRADAR_MODELS_DIR, RRADAR_MODEL_BASE_URL, ORT_VERSION
 
 param(
     [switch]$FetchOrt,
+    [switch]$WritePins,
     [string]$ModelsDir = $(if ($env:RRADAR_MODELS_DIR) { $env:RRADAR_MODELS_DIR } else { Join-Path $PSScriptRoot "..\models" })
 )
 
@@ -16,7 +18,11 @@ $ModelsDir = [System.IO.Path]::GetFullPath($ModelsDir)
 $OrtDir = Join-Path $ModelsDir "ort"
 New-Item -ItemType Directory -Force -Path $ModelsDir, $OrtDir | Out-Null
 
-$HfBase = if ($env:RRADAR_MODEL_BASE_URL) { $env:RRADAR_MODEL_BASE_URL.TrimEnd('/') } else { "https://huggingface.co/SWHL/RapidOCR/resolve/main" }
+$HfBase = if ($env:RRADAR_MODEL_BASE_URL) {
+    $env:RRADAR_MODEL_BASE_URL.TrimEnd('/')
+} else {
+    "https://huggingface.co/SWHL/RapidOCR/resolve/main"
+}
 
 $Files = @(
     @{ Name = "ch_PP-OCRv4_det_infer.onnx"; Rel = "PP-OCRv4/ch_PP-OCRv4_det_infer.onnx" },
@@ -25,13 +31,6 @@ $Files = @(
 )
 
 $Manifest = Join-Path $ModelsDir "manifest.sha256"
-if (-not (Test-Path $Manifest)) {
-    @"
-# sha256  filename  (fill after first trusted download; fetch verifies when non-comment)
-# Generate: Get-FileHash models\*.onnx -Algorithm SHA256
-"@ | Set-Content -Path $Manifest -Encoding utf8
-    Write-Host "created $Manifest (hashes optional until you pin them)"
-}
 
 function Get-Sha256([string]$Path) {
     (Get-FileHash -Path $Path -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -73,6 +72,24 @@ foreach ($f in $Files) {
     Test-ManifestPin -Name $f.Name -Path $dest
 }
 
+if ($WritePins) {
+    $lines = @(
+        "# sha256  filename  (pinned RapidOCR pack from SWHL/RapidOCR on HuggingFace)",
+        "# Source base: $HfBase",
+        "# Generated: $(Get-Date -Format 'yyyy-MM-dd') via tools/fetch-models.ps1 -WritePins"
+    )
+    foreach ($f in $Files) {
+        $dest = Join-Path $ModelsDir $f.Name
+        if (-not (Test-Path $dest)) { throw "missing $($f.Name) for pin write" }
+        $h = Get-Sha256 $dest
+        $lines += "$h  $($f.Name)"
+        Write-Host "pin $($f.Name) = $h"
+    }
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($Manifest, (($lines -join "`n") + "`n"), $utf8)
+    Write-Host "wrote $Manifest"
+}
+
 if ($FetchOrt -or $env:RRADAR_FETCH_ORT -eq "1") {
     $OrtVer = if ($env:ORT_VERSION) { $env:ORT_VERSION } else { "1.20.1" }
     $zipName = "onnxruntime-win-x64-$OrtVer.zip"
@@ -96,8 +113,8 @@ if ($FetchOrt -or $env:RRADAR_FETCH_ORT -eq "1") {
     }
     $dllPath = Join-Path $OrtDir "onnxruntime.dll"
     Write-Host "ORT ready: $dllPath"
-    Write-Host "  (rradar auto-detects models/ort; or set ORT_DYLIB_PATH=$dllPath)"
+    Write-Host "  set ORT_DYLIB_PATH or rely on models/ort auto-detect"
 }
 
-Write-Host "ok — models in $ModelsDir"
+Write-Host "ok models in $ModelsDir"
 Write-Host "next: cargo run -p rradar-cli --features onnx -- process photo.jpg --engine onnx"

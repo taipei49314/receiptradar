@@ -1,18 +1,41 @@
 # OCR models (ONNX RapidOCR)
 
-**Not bundled in git.** Default CI / `cargo test` uses the **mock** engine.
+**Not bundled in git.** Default CI / `cargo test` uses the **mock** engine.  
+**A05 pins are frozen** in [`manifest.sha256`](./manifest.sha256) (hashes only).
+
+## Pinned pack (desktop default)
+
+Source: [SWHL/RapidOCR](https://huggingface.co/SWHL/RapidOCR) on HuggingFace (Apache-2.0 lineage).
+
+| File | Role | SHA-256 (prefix) | ~Size |
+|------|------|------------------|-------|
+| `ch_PP-OCRv4_det_infer.onnx` | Text detection (DB) | `d2a7720d45a5…` | ~4.5 MiB |
+| `ch_PP-OCRv4_rec_infer.onnx` | Recognition (CRNN, CJK) | `48fc40f24f6d…` | ~10 MiB |
+| `ch_ppocr_mobile_v2.0_cls_infer.onnx` | Angle classifier | `e47acedf6632…` | ~0.7 MiB |
+
+Full digests: `manifest.sha256`. After download:
+
+```bash
+rradar models verify
+# or
+cargo run -p rradar-cli -- models verify
+```
 
 ## Quick path (desktop, real OCR)
 
 ```powershell
-# 1) Weights + ORT shared lib (Windows)
+# 1) Weights (+ optional ORT shared lib on Windows)
+powershell -File tools/fetch-models.ps1
 powershell -File tools/fetch-models.ps1 -FetchOrt
+# rewrite pins after a trusted re-download:
+# powershell -File tools/fetch-models.ps1 -WritePins
 
 # 2) Build CLI with inference linked
 cargo build -p rradar-cli --features onnx --release
 
 # 3) Process an image (JPEG/PNG)
-$env:RRADAR_MODELS_DIR = "$PWD\models"   # optional if using ./models
+$env:RRADAR_MODELS_DIR = "$PWD\models"
+.\target\release\rradar.exe models verify
 .\target\release\rradar.exe process path\to\receipt.jpg --engine onnx --explain
 ```
 
@@ -21,6 +44,7 @@ $env:RRADAR_MODELS_DIR = "$PWD\models"   # optional if using ./models
 ./tools/fetch-models.sh
 RRADAR_FETCH_ORT=1 ./tools/fetch-models.sh   # Linux x64 ORT best-effort
 cargo build -p rradar-cli --features onnx --release
+./target/release/rradar models verify
 ./target/release/rradar process photo.jpg --engine onnx --explain
 ```
 
@@ -35,7 +59,7 @@ Without models or without `--features onnx`, `--engine onnx` fails with a **clea
 | `ch_ppocr_mobile_v2.0_cls_infer.onnx` | Angle classifier |
 | `ppocr_keys_v1.txt` | Optional dict override (crate has built-in keys) |
 | `ort/onnxruntime.dll` (Windows) / `libonnxruntime.so*` | ORT for `load-dynamic` |
-| `manifest.sha256` | Optional SHA-256 pins (`tools/fetch-models.*` verifies when present) |
+| `manifest.sha256` | **Committed** SHA-256 pins |
 
 ## Cargo feature
 
@@ -45,11 +69,6 @@ Without models or without `--features onnx`, `--engine onnx` fails with a **clea
 | `--features onnx` on `rradar-cli` / `rradar-ocr` | paddle-ocr-rs + ort **load-dynamic** |
 
 Why `load-dynamic`? Prebuilt ORT tarballs for **windows-gnu** are not published by ort-sys; load-dynamic compiles on GNU and MSVC and loads the Microsoft ORT DLL at runtime.
-
-```toml
-# crates/rradar-cli
-onnx = ["rradar-ocr/onnx"]
-```
 
 ## Environment
 
@@ -76,7 +95,7 @@ The PP-OCRv4 **Chinese** rec pack is simplified-primary; Traditional Chinese rec
 ## Doctor
 
 ```bash
-cargo run -p rradar-cli --features onnx -- doctor
+cargo run -p rradar-cli -- doctor
+cargo run -p rradar-cli -- models status
+cargo run -p rradar-cli --features onnx -- models verify
 ```
-
-Prints per-file model presence, feature flag, and ORT dylib discovery.

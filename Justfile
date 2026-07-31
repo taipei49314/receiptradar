@@ -40,6 +40,9 @@ doctor-onnx:
 fetch-models:
     powershell -NoProfile -ExecutionPolicy Bypass -File tools/fetch-models.ps1 -FetchOrt
 
+models-verify:
+    cargo run -q -p rradar-cli -- models verify
+
 cli-onnx *args:
     cargo run -q -p rradar-cli --features onnx -- {{args}}
 

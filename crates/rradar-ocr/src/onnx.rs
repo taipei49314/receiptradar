@@ -85,6 +85,30 @@ impl OnnxConfig {
                 );
             }
         }
+        // Hash pins from models/manifest.sha256 (committed; weights are not).
+        match crate::manifest::verify_models_dir(self.models_dir(), false) {
+            Ok(checks) if checks.is_empty() => {
+                out.push("  model pins: none (add lines to models/manifest.sha256)".into());
+            }
+            Ok(checks) => {
+                let ok = checks.iter().filter(|c| c.is_ok()).count();
+                let n = checks.len();
+                out.push(format!(
+                    "  model pins: {ok}/{n} verified{}",
+                    if ok == n {
+                        ""
+                    } else {
+                        " — run tools/fetch-models.* then rradar models verify"
+                    }
+                ));
+                for c in checks {
+                    if !c.is_ok() {
+                        out.push(c.summary_line());
+                    }
+                }
+            }
+            Err(e) => out.push(format!("  model pins: error ({e})")),
+        }
         out
     }
 }

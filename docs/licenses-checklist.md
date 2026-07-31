@@ -7,8 +7,8 @@ Complete before first public binary / `v0.1.0` release tag.
 | Rust crates (Cargo.lock) | `cargo tree` | various | ☐ | Run `cargo license` or cargo-deny |
 | rusqlite / SQLite amalgamation | bundled | blessing / public domain | ☐ | |
 | chacha20poly1305, argon2, hkdf, sha2 | crates.io | MIT/Apache | ☐ | |
-| ONNX Runtime (when enabled) | release asset | check ORT | ☐ | Post A05 |
-| RapidOCR / Paddle weights | model pack | check NOTICE | ☐ | Separate release asset |
+| ONNX Runtime (when enabled) | release asset (MS ORT 1.20.x) | MIT | ☐ | load-dynamic; not bundled in git |
+| RapidOCR / Paddle weights | `models/manifest.sha256` pin | Apache-2.0 lineage | ☑ pin | SWHL/RapidOCR HF; weights not in git; verify via `rradar models verify` |
 | Flutter + plugins | pubspec (later) | various | ☐ | A18+ |
 | SQLCipher community (if P1) | amalgamation | zlib-like | ☐ | Prefer P2 sealed if not used |
 

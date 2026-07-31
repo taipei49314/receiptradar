@@ -1493,10 +1493,12 @@ dependencies = [
 name = "rradar-ocr"
 version = "0.1.0-alpha.0"
 dependencies = [
+ "hex",
  "image",
  "ort",
  "paddle-ocr-rs",
  "serde",
+ "sha2",
  "thiserror",
 ]
 
