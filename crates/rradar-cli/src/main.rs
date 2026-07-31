@@ -2,10 +2,10 @@
 
 use rradar_core::{
     apply_edits, create_backup, data_dir, default_db_path, ensure_data_dir, inspect_backup,
-    open_ledger_auto, process_path, restore_backup, save_sealed, transactions_from_backup,
-    transactions_to_csv, transactions_to_json, verify_backup, write_restored_db, AppConfig,
-    CategoryEngine, Iso4217, Money, ProcessOptions, ReceiptDraft, Transaction, TxUpdate, UserEdits,
-    LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
+    monthly_markdown, open_ledger_auto, process_path, restore_backup, save_sealed,
+    transactions_from_backup, transactions_to_csv, transactions_to_json, verify_backup,
+    write_restored_db, AppConfig, CategoryEngine, Iso4217, Money, ProcessOptions, ReceiptDraft,
+    Transaction, TxUpdate, UserEdits, LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
 };
 use rradar_ocr::engine_by_name;
 use std::env;
@@ -43,6 +43,8 @@ fn main() -> ExitCode {
         "edit" => cmd_edit(&args[1..]),
         "stats" => cmd_stats(&args[1..]),
         "top" => cmd_top(&args[1..]),
+        "report" => cmd_report(&args[1..]),
+        "watch" => cmd_watch(&args[1..]),
         "recategorize" => cmd_recategorize(&args[1..]),
         "clear" => cmd_clear(&args[1..]),
         "categories" | "cats" => cmd_categories(),
@@ -1298,10 +1300,13 @@ fn cmd_stats(args: &[String]) -> Result<(), String> {
     let mut all = false;
     let mut from: Option<String> = None;
     let mut to: Option<String> = None;
+    let mut by_category = false;
+    let mut currency = default_currency_from_env().to_string();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--all" => all = true,
+            "--by-category" => by_category = true,
             "--year" => {
                 i += 1;
                 year = Some(
@@ -1328,12 +1333,54 @@ fn cmd_stats(args: &[String]) -> Result<(), String> {
                 i += 1;
                 to = Some(args.get(i).ok_or("needs value")?.clone());
             }
+            "--currency" => {
+                i += 1;
+                currency = args.get(i).ok_or("needs value")?.clone();
+            }
             _ => {}
         }
         i += 1;
     }
     let flags = extract_db_from_all(args)?;
     let (ledger, tmp) = open_db(&flags)?;
+
+    if by_category {
+        let ym = match (year, month) {
+            (Some(y), Some(m)) => Some(format!("{y:04}-{m:02}")),
+            _ if all => None,
+            _ => {
+                let (y, m) = current_year_month();
+                Some(format!("{y:04}-{m:02}"))
+            }
+        };
+        println!(
+            "categories | currency={currency} | period={}",
+            ym.as_deref().unwrap_or("all-time")
+        );
+        let rows = ledger
+            .stats_by_category(&currency, ym.as_deref())
+            .map_err(|e| e.to_string())?;
+        if rows.is_empty() {
+            println!("(no transactions)");
+        } else {
+            for c in &rows {
+                let major = Money::new(
+                    c.total_minor,
+                    Iso4217::parse(&c.currency).unwrap_or(Iso4217::TWD),
+                )
+                .display_major();
+                println!(
+                    "{} | {} | count={} | minor={}",
+                    c.category, major, c.count, c.total_minor
+                );
+            }
+        }
+        if let Some(t) = tmp {
+            let _ = std::fs::remove_file(t);
+        }
+        return Ok(());
+    }
+
     let stats = if all {
         println!("period | all-time");
         ledger.stats_by_currency_all().map_err(|e| e.to_string())?
@@ -1370,6 +1417,159 @@ fn cmd_stats(args: &[String]) -> Result<(), String> {
     }
     if let Some(t) = tmp {
         let _ = std::fs::remove_file(t);
+    }
+    Ok(())
+}
+
+fn cmd_report(args: &[String]) -> Result<(), String> {
+    let mut year: Option<i32> = None;
+    let mut month: Option<u32> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--year" => {
+                i += 1;
+                year = Some(
+                    args.get(i)
+                        .ok_or("needs year")?
+                        .parse()
+                        .map_err(|_| "bad year")?,
+                );
+            }
+            "--month" => {
+                i += 1;
+                month = Some(
+                    args.get(i)
+                        .ok_or("needs month")?
+                        .parse()
+                        .map_err(|_| "bad month")?,
+                );
+            }
+            "-o" | "--output" => {
+                i += 1;
+                out = Some(PathBuf::from(args.get(i).ok_or("needs path")?));
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let (y, m) = match (year, month) {
+        (Some(y), Some(m)) => (y, m),
+        _ => current_year_month(),
+    };
+    let flags = extract_db_from_all(args)?;
+    let (ledger, tmp) = open_db(&flags)?;
+    let md = monthly_markdown(&ledger, y, m).map_err(|e| e.to_string())?;
+    if let Some(p) = out {
+        if let Some(parent) = p.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(&p, md.as_bytes()).map_err(|e| e.to_string())?;
+        println!("wrote | {}", p.display());
+    } else {
+        print!("{md}");
+    }
+    if let Some(t) = tmp {
+        let _ = std::fs::remove_file(t);
+    }
+    Ok(())
+}
+
+fn cmd_watch(args: &[String]) -> Result<(), String> {
+    // rradar watch <dir> [--interval 2] [--confirm] [--once]
+    let mut dir: Option<PathBuf> = None;
+    let mut interval_secs: u64 = 2;
+    let mut confirm = true;
+    let mut once = false;
+    let mut engine = "mock".to_string();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--interval" => {
+                i += 1;
+                interval_secs = args
+                    .get(i)
+                    .ok_or("needs secs")?
+                    .parse()
+                    .map_err(|_| "bad interval")?;
+            }
+            "--no-confirm" => confirm = false,
+            "--once" => once = true,
+            "--engine" => {
+                i += 1;
+                engine = args.get(i).ok_or("needs engine")?.clone();
+            }
+            s if !s.starts_with('-') => dir = Some(PathBuf::from(s)),
+            other => return Err(format!("unknown flag {other}")),
+        }
+        i += 1;
+    }
+    let dir = dir.ok_or("usage: rradar watch <dir> [--interval 2] [--once] [--engine mock]")?;
+    if !dir.is_dir() {
+        return Err(format!("not a directory: {}", dir.display()));
+    }
+    let flags = extract_db_from_all(args)?;
+    let _ = ensure_data_dir();
+    let mut seen = std::collections::HashSet::<String>::new();
+    // seed seen with existing files so first pass only picks new ones unless --once on empty seen means process all
+    if !once {
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_file() {
+                    seen.insert(p.display().to_string());
+                }
+            }
+        }
+        println!(
+            "watch | {} | interval={interval_secs}s | seeded {} existing files",
+            dir.display(),
+            seen.len()
+        );
+    }
+    loop {
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            let mut files: Vec<PathBuf> = rd
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_file())
+                .collect();
+            files.sort();
+            for path in files {
+                let key = path.display().to_string();
+                if seen.contains(&key) && !once {
+                    continue;
+                }
+                if once && seen.contains(&key) {
+                    continue;
+                }
+                seen.insert(key.clone());
+                let mut proc_args = vec![path.display().to_string()];
+                if confirm {
+                    proc_args.push("--confirm".into());
+                    proc_args.push("-q".into());
+                }
+                proc_args.push("--engine".into());
+                proc_args.push(engine.clone());
+                if let Some(ref db) = flags.db.to_str() {
+                    // always pass db for confirm path
+                    if confirm {
+                        proc_args.push("--db".into());
+                        proc_args.push(db.to_string());
+                    }
+                }
+                println!("watch | processing {}", path.display());
+                // call process logic by reconstructing argv
+                if let Err(e) = cmd_process(&proc_args) {
+                    eprintln!("watch | error: {e}");
+                }
+            }
+        }
+        if once {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(interval_secs));
     }
     Ok(())
 }
@@ -1960,8 +2160,10 @@ Commands:
   show <id>            Show one transaction (JSON)
   edit <id>            Edit merchant/amount/category/notes/date
   delete <id> --yes    Delete transaction (alias: rm)
-  stats                Per-currency totals (default: this month)
+  stats                Per-currency totals; --by-category for breakdown
   top                  Top merchants by spend (one currency)
+  report               Markdown monthly report (-o file.md)
+  watch <dir>          Auto-process new files in a folder
   recategorize         Re-run category rules (default: only `other`)
   clear --yes          Wipe all transactions
   categories           List category ids

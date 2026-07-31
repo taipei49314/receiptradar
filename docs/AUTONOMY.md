@@ -190,3 +190,20 @@
 - Non-goals: official sync, GPT wrapper  
 
 
+
+## Full-speed sprint (2026-07-31 user request)
+
+### Plan
+Product analytics + inbox automation + FFI analytics surface
+
+### Delivered
+- `stats --by-category --currency`
+- `report` monthly markdown
+- `watch <dir>` auto-ingest
+- FFI `stats_by_category_json` / `report_month_markdown`
+
+### Verify
+- cargo test/clippy green; smoke report OK
+
+### Repo
+- tag v0.1.0-cli.8

@@ -87,6 +87,15 @@ pub struct CurrencyMonthStat {
     pub count: i64,
 }
 
+/// Per-category totals **within one currency** (never mixes currencies).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CategoryStat {
+    pub currency: String,
+    pub category: String,
+    pub total_minor: i64,
+    pub count: i64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DedupeLevel {
@@ -667,6 +676,52 @@ impl Ledger {
                 count: r.get(2)?,
             })
         })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// Category breakdown for one currency, optional month prefix `YYYY-MM` or all-time.
+    pub fn stats_by_category(
+        &self,
+        currency: &str,
+        year_month: Option<&str>,
+    ) -> Result<Vec<CategoryStat>, LedgerError> {
+        let (sql, bind_ym): (&str, Option<&str>) = if let Some(ym) = year_month {
+            (
+                r#"SELECT currency, category, SUM(amount_minor), COUNT(*)
+                   FROM transactions
+                   WHERE currency = ?1 AND substr(transacted_at,1,7) = ?2
+                   GROUP BY currency, category
+                   ORDER BY SUM(amount_minor) DESC"#,
+                Some(ym),
+            )
+        } else {
+            (
+                r#"SELECT currency, category, SUM(amount_minor), COUNT(*)
+                   FROM transactions
+                   WHERE currency = ?1
+                   GROUP BY currency, category
+                   ORDER BY SUM(amount_minor) DESC"#,
+                None,
+            )
+        };
+        let mut stmt = self.conn.prepare(sql)?;
+        let map = |r: &rusqlite::Row<'_>| {
+            Ok(CategoryStat {
+                currency: r.get(0)?,
+                category: r.get(1)?,
+                total_minor: r.get(2)?,
+                count: r.get(3)?,
+            })
+        };
+        let rows = if let Some(ym) = bind_ym {
+            stmt.query_map(params![currency, ym], map)?
+        } else {
+            stmt.query_map(params![currency], map)?
+        };
         let mut out = Vec::new();
         for r in rows {
             out.push(r?);

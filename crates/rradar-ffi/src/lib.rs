@@ -329,6 +329,38 @@ pub fn stats_month_json(
     })
 }
 
+/// Category breakdown for one currency (optional `year_month` = `YYYY-MM` or empty for all-time).
+pub fn stats_by_category_json(
+    db_path: String,
+    passphrase: Option<String>,
+    currency: String,
+    year_month: String,
+) -> Result<String, String> {
+    with_ledger(&db_path, passphrase.as_deref(), |ledger| {
+        let ym = if year_month.is_empty() {
+            None
+        } else {
+            Some(year_month.as_str())
+        };
+        let rows = ledger
+            .stats_by_category(&currency, ym)
+            .map_err(|e| e.to_string())?;
+        serde_json::to_string(&rows).map_err(|e| e.to_string())
+    })
+}
+
+/// Markdown monthly report for year/month.
+pub fn report_month_markdown(
+    db_path: String,
+    passphrase: Option<String>,
+    year: i32,
+    month: u32,
+) -> Result<String, String> {
+    with_ledger(&db_path, passphrase.as_deref(), |ledger| {
+        rradar_core::monthly_markdown(ledger, year, month).map_err(|e| e.to_string())
+    })
+}
+
 /// Top merchants for one currency: JSON array of `{merchant, total_minor, count}`.
 pub fn top_merchants_json(
     db_path: String,

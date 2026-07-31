@@ -14,6 +14,7 @@ pub mod paths;
 pub mod pipeline;
 pub mod preprocess;
 pub mod qr;
+pub mod report;
 pub mod sealed;
 pub mod types;
 
@@ -26,12 +27,13 @@ pub use export::{
     write_restored_db, BackupFileInfo, BackupInspect, BackupManifest, ExportError, RestoredBackup,
 };
 pub use ledger::{
-    apply_edits, ConfirmResult, CurrencyMonthStat, DedupeLevel, DedupeWarning, Ledger, LedgerError,
-    Transaction, TxUpdate, UserEdits, LEDGER_SCHEMA_VERSION,
+    apply_edits, CategoryStat, ConfirmResult, CurrencyMonthStat, DedupeLevel, DedupeWarning,
+    Ledger, LedgerError, Transaction, TxUpdate, UserEdits, LEDGER_SCHEMA_VERSION,
 };
 pub use money::{sum_same_currency, Iso4217, Money, MoneyError};
 pub use paths::{data_dir, default_db_path, ensure_data_dir};
 pub use pipeline::{process_bytes, process_path, utc_now_iso, ProcessError, ProcessOptions};
+pub use report::monthly_markdown;
 pub use sealed::{open_ledger_auto, save_sealed, seal_db_file};
 pub use types::{Field, FieldSource, ReceiptDraft, SourcePath, TextBlock};
 
