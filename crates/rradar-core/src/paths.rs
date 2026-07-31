@@ -50,6 +50,22 @@ pub fn ensure_data_dir() -> std::io::Result<PathBuf> {
     Ok(d)
 }
 
+/// Default inbox for `rradar watch` / drop-folder capture.
+/// Override with `RRADAR_INBOX`.
+pub fn inbox_dir() -> PathBuf {
+    if let Ok(p) = std::env::var("RRADAR_INBOX") {
+        return PathBuf::from(p);
+    }
+    data_dir().join("inbox")
+}
+
+/// Ensure inbox directory exists.
+pub fn ensure_inbox_dir() -> std::io::Result<PathBuf> {
+    let d = inbox_dir();
+    std::fs::create_dir_all(&d)?;
+    Ok(d)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

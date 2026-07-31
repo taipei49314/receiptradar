@@ -31,7 +31,7 @@ pub use ledger::{
     Ledger, LedgerError, Transaction, TxUpdate, UserEdits, LEDGER_SCHEMA_VERSION,
 };
 pub use money::{sum_same_currency, Iso4217, Money, MoneyError};
-pub use paths::{data_dir, default_db_path, ensure_data_dir};
+pub use paths::{data_dir, default_db_path, ensure_data_dir, ensure_inbox_dir, inbox_dir};
 pub use pipeline::{process_bytes, process_path, utc_now_iso, ProcessError, ProcessOptions};
 pub use report::monthly_markdown;
 pub use sealed::{open_ledger_auto, save_sealed, seal_db_file};

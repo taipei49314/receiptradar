@@ -22,6 +22,7 @@ onnx = ["rradar-ocr/onnx"]
 rradar-core = { workspace = true }
 rradar-ocr = { workspace = true }
 anyhow = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]

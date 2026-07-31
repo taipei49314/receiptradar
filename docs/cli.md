@@ -118,6 +118,20 @@ Ids: `food_dining`, `grocery_convenience`, `transport`, `shopping`, `health`, `u
 - `0` success  
 - `1` error (message on stderr)
 
+## Inbox + local API
+
+```bash
+rradar inbox --ensure          # create %APPDATA%/receiptradar/inbox
+# drop files into inbox, then:
+rradar watch                   # default watches inbox
+rradar watch --once            # process existing new files and exit
+
+# Local-only HTTP (loopback only; no cloud)
+rradar serve                   # http://127.0.0.1:7432
+# GET  /health /version /transactions /stats /report?y=2024&m=5
+# POST /process  {"path":"C:/tmp/r.txt","confirm":true}
+```
+
 ## Completeness (CLI product)
 
 - [x] init / doctor / default paths  

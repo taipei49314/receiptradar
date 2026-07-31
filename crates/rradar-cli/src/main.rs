@@ -1,11 +1,13 @@
 //! `rradar` — complete local-first receipt ledger CLI.
 
+mod serve;
+
 use rradar_core::{
-    apply_edits, create_backup, data_dir, default_db_path, ensure_data_dir, inspect_backup,
-    monthly_markdown, open_ledger_auto, process_path, restore_backup, save_sealed,
-    transactions_from_backup, transactions_to_csv, transactions_to_json, verify_backup,
-    write_restored_db, AppConfig, CategoryEngine, Iso4217, Money, ProcessOptions, ReceiptDraft,
-    Transaction, TxUpdate, UserEdits, LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
+    apply_edits, create_backup, data_dir, default_db_path, ensure_data_dir, ensure_inbox_dir,
+    inbox_dir, inspect_backup, monthly_markdown, open_ledger_auto, process_path, restore_backup,
+    save_sealed, transactions_from_backup, transactions_to_csv, transactions_to_json,
+    verify_backup, write_restored_db, AppConfig, CategoryEngine, Iso4217, Money, ProcessOptions,
+    ReceiptDraft, Transaction, TxUpdate, UserEdits, LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
 };
 use rradar_ocr::engine_by_name;
 use std::env;
@@ -45,6 +47,8 @@ fn main() -> ExitCode {
         "top" => cmd_top(&args[1..]),
         "report" => cmd_report(&args[1..]),
         "watch" => cmd_watch(&args[1..]),
+        "inbox" => cmd_inbox(&args[1..]),
+        "serve" => cmd_serve(&args[1..]),
         "recategorize" => cmd_recategorize(&args[1..]),
         "clear" => cmd_clear(&args[1..]),
         "categories" | "cats" => cmd_categories(),
@@ -55,8 +59,9 @@ fn main() -> ExitCode {
         "seal" => cmd_seal(&args[1..]),
         "unseal" => cmd_unseal(&args[1..]),
         "path" => {
-            println!("home | {}", data_dir().display());
-            println!("db   | {}", default_db_path().display());
+            println!("home  | {}", data_dir().display());
+            println!("db    | {}", default_db_path().display());
+            println!("inbox | {}", inbox_dir().display());
             Ok(())
         }
         other => Err(format!("unknown command `{other}` — try `rradar help`")),
@@ -206,6 +211,7 @@ fn cmd_doctor(_args: &[String]) -> Result<(), String> {
     println!("  version:  {VERSION}");
     println!("  home:     {}", data_dir().display());
     println!("  db:       {}", default_db_path().display());
+    println!("  inbox:    {}", inbox_dir().display());
     println!("  config:   {}", AppConfig::path().display());
     println!("  currency: {}", cfg.default_currency);
     let db = default_db_path();
@@ -1476,8 +1482,46 @@ fn cmd_report(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn cmd_inbox(args: &[String]) -> Result<(), String> {
+    let open = args.iter().any(|a| a == "--ensure" || a == "ensure");
+    let path = if open {
+        ensure_inbox_dir().map_err(|e| e.to_string())?
+    } else {
+        inbox_dir()
+    };
+    println!("inbox | {}", path.display());
+    if open {
+        println!("hint | drop receipt .txt/.jpg here then: rradar watch");
+    } else if !path.is_dir() {
+        println!("hint | run: rradar inbox --ensure");
+    }
+    Ok(())
+}
+
+fn cmd_serve(args: &[String]) -> Result<(), String> {
+    let mut bind = serve::default_bind();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i].as_str() == "--bind" {
+            i += 1;
+            bind = args.get(i).ok_or("needs bind host:port")?.clone();
+        }
+        i += 1;
+    }
+    if !bind.starts_with("127.") && !bind.starts_with("localhost") && !bind.starts_with("[::1]") {
+        return Err("refuse to bind non-loopback (local-only API)".into());
+    }
+    let flags = extract_db_from_all(args)?;
+    let _ = ensure_data_dir();
+    serve::run(serve::ServeOpts {
+        bind,
+        db: flags.db,
+        passphrase: flags.passphrase,
+    })
+}
+
 fn cmd_watch(args: &[String]) -> Result<(), String> {
-    // rradar watch <dir> [--interval 2] [--confirm] [--once]
+    // rradar watch [dir] [--interval 2] [--once]  — default dir = inbox
     let mut dir: Option<PathBuf> = None;
     let mut interval_secs: u64 = 2;
     let mut confirm = true;
@@ -1505,7 +1549,11 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
         }
         i += 1;
     }
-    let dir = dir.ok_or("usage: rradar watch <dir> [--interval 2] [--once] [--engine mock]")?;
+    let dir = if let Some(d) = dir {
+        d
+    } else {
+        ensure_inbox_dir().map_err(|e| e.to_string())?
+    };
     if !dir.is_dir() {
         return Err(format!("not a directory: {}", dir.display()));
     }
@@ -2163,7 +2211,9 @@ Commands:
   stats                Per-currency totals; --by-category for breakdown
   top                  Top merchants by spend (one currency)
   report               Markdown monthly report (-o file.md)
-  watch <dir>          Auto-process new files in a folder
+  inbox [--ensure]     Show default drop folder (RRADAR_INBOX)
+  watch [dir]          Auto-process new files (default: inbox)
+  serve [--bind 127.0.0.1:7432]  Local-only HTTP API
   recategorize         Re-run category rules (default: only `other`)
   clear --yes          Wipe all transactions
   categories           List category ids

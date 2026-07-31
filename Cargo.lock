@@ -1456,6 +1456,7 @@ dependencies = [
  "anyhow",
  "rradar-core",
  "rradar-ocr",
+ "serde",
  "serde_json",
 ]
 
