@@ -78,7 +78,16 @@ Why `load-dynamic`? Prebuilt ORT tarballs for **windows-gnu** are not published 
 | `ORT_DYLIB_PATH` | Full path to `onnxruntime` shared library |
 | `RRADAR_MODEL_BASE_URL` | Override download base (default HuggingFace `SWHL/RapidOCR`) |
 | `RRADAR_FETCH_ORT=1` | Shell script: also try to fetch ORT |
-| `ORT_VERSION` | ORT release tag (default `1.20.1`) |
+| `ORT_VERSION` | ORT release tag (**default `1.22.0`** — must match ort 2.0.0-rc.10 / `1.22.x`) |
+
+## Desktop e2e smoke
+
+```powershell
+powershell -File scripts/smoke-onnx.ps1
+# expects: models verify OK + onnx process fixtures/images/receipt_en_total89.png
+```
+
+Verified on Windows (2026-07-31): `--engine onnx` on synthetic English receipt → `engine=onnx-rapidocr`, total 89 TWD.
 
 If `ORT_DYLIB_PATH` is unset, `rradar` looks for `models/ort/onnxruntime.{dll,so,dylib}`.
 

@@ -415,7 +415,42 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
         }
     }
 
-    step(3, "TW e-invoice QR prefer path");
+    step(3, "pixel path image + .ocr.txt sidecar (CI-safe)");
+    let img_sidecar = fixtures.join("images/familymart_photo.png");
+    if img_sidecar.is_file() {
+        let draft = process_path(
+            &img_sidecar,
+            eng.as_ref(),
+            &categories,
+            ProcessOptions {
+                default_currency: Iso4217::TWD,
+                ..Default::default()
+            },
+        )
+        .map_err(|e| format!("{}: {e}", img_sidecar.display()))?;
+        let hash =
+            rradar_core::preprocess::content_hash(&std::fs::read(&img_sidecar).unwrap_or_default());
+        let res = ledger
+            .confirm_draft(&draft, Some(&hash), Some("demo image sidecar"), false)
+            .map_err(|e| e.to_string())?;
+        if res.inserted {
+            confirmed += 1;
+        }
+        if !quiet {
+            println!(
+                "  ✓ {:<28}  {} (sidecar OCR text)",
+                img_sidecar
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("?"),
+                draft.merchant.value
+            );
+        }
+    } else if !quiet {
+        println!("  (skip — fixtures/images not present)");
+    }
+
+    step(4, "TW e-invoice QR prefer path");
     if qr_sample.is_file() {
         let payload = std::fs::read_to_string(&qr_sample)
             .map_err(|e| e.to_string())?
@@ -455,7 +490,7 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
         println!("  (skip — qr sample missing)");
     }
 
-    step(4, "browse ledger");
+    step(5, "browse ledger");
     let n = ledger.count().map_err(|e| e.to_string())?;
     let rows = ledger.list_transactions(8, 0).map_err(|e| e.to_string())?;
     if !quiet {
@@ -471,7 +506,7 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
         }
     }
 
-    step(5, "stats + top merchants");
+    step(6, "stats + top merchants");
     let stats = ledger.stats_by_currency_all().map_err(|e| e.to_string())?;
     if !quiet {
         for s in &stats {
@@ -487,7 +522,7 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
         }
     }
 
-    step(6, "export CSV + JSON");
+    step(7, "export CSV + JSON");
     let out_dir = demo_db
         .parent()
         .map(Path::to_path_buf)
@@ -507,7 +542,7 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
     }
 
     if !skip_backup {
-        step(7, "encrypted backup.rradar");
+        step(8, "encrypted backup.rradar");
         // Demo passphrase is intentionally public; real users choose their own.
         let bak = out_dir.join("demo-backup.rradar");
         let bytes = create_backup(
@@ -525,7 +560,7 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
         }
     }
 
-    step(8, "monthly markdown report");
+    step(9, "monthly markdown report");
     // Pick a month that appears in fixtures (2024-05 family mart).
     let md = monthly_markdown(&ledger, 2024, 5).map_err(|e| e.to_string())?;
     let report_path = out_dir.join("demo-report-2024-05.md");
@@ -537,7 +572,7 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
         }
     }
 
-    step(9, "ONNX model pin status (weights optional)");
+    step(10, "ONNX model pin status (weights optional)");
     let models_dir = rradar_ocr::default_models_dir();
     match rradar_ocr::verify_models_dir(&models_dir, false) {
         Ok(checks) if checks.is_empty() => {
@@ -575,6 +610,7 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
             "      rradar serve --db {}   # loopback HTTP only",
             demo_db.display()
         );
+        println!("      powershell -File scripts/smoke-onnx.ps1  # optional real ONNX e2e");
         println!("Record tip: capture this command output as a terminal GIF for README.");
     } else {
         println!("DEMO_OK n={n}");

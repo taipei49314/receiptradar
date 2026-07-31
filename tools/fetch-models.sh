@@ -60,7 +60,8 @@ if [[ "${RRADAR_FETCH_ORT:-0}" == "1" ]]; then
   OS="$(uname -s)"
   ARCH="$(uname -m)"
   # Microsoft ONNX Runtime CPU releases (best-effort; pin in release process)
-  ORT_VER="${ORT_VERSION:-1.20.1}"
+  # Match ort 2.0.0-rc.10 expectation (1.22.x).
+  ORT_VER="${ORT_VERSION:-1.22.0}"
   case "$OS-$ARCH" in
     Linux-x86_64)
       ORT_URL="https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VER}/onnxruntime-linux-x64-${ORT_VER}.tgz"

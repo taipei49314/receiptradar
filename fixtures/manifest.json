@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "note": "Text fixtures for metric (a) extract-given-text; mock_ocr binaries for mock image path; QR payloads for Appendix A. Real pixel e2e matrix is PR-A11 under PII policy. Demo matrix is sized for recordable GIF / rradar demo.",
+  "note": "Text fixtures for metric (a); mock_ocr binaries; images with sidecar for pixel path (CI); receipt_en_total89.png is for optional ONNX smoke (scripts/smoke-onnx.*). Real photo e2e matrix is PR-A11 under PII policy.",
   "text_fixtures": [
     { "path": "text/familymart_89.txt", "class": "tw_convenience", "expect_total_minor": 8900, "expect_currency": "TWD", "demo": true },
     { "path": "text/seven_eleven_tw.txt", "class": "tw_convenience", "expect_total_minor": 4500, "expect_currency": "TWD", "demo": true },
@@ -17,6 +17,25 @@
   "mock_ocr_fixtures": [
     { "path": "mock_ocr/familymart_mock.bin", "class": "mock_image_path", "expect_total_minor": 8900, "expect_currency": "TWD", "demo": true },
     { "path": "mock_ocr/starbucks_mock.bin", "class": "mock_image_path", "expect_total_minor": 545, "expect_currency": "USD", "demo": true }
+  ],
+  "image_sidecar_fixtures": [
+    {
+      "path": "images/familymart_photo.png",
+      "sidecar": "images/familymart_photo.png.ocr.txt",
+      "class": "pixel_path_with_sidecar",
+      "expect_total_minor": 8900,
+      "expect_currency": "TWD",
+      "demo": true
+    }
+  ],
+  "onnx_smoke_images": [
+    {
+      "path": "images/receipt_en_total89.png",
+      "class": "synthetic_en_receipt",
+      "expect_total_minor": 8900,
+      "expect_currency": "TWD",
+      "note": "optional scripts/smoke-onnx.*; requires --features onnx + models + ORT 1.22.x"
+    }
   ],
   "qr_fixtures": [
     { "path": "qr/tw_einvoice_sample_01.payload.txt", "expected": "qr/tw_einvoice_sample_01.expected.json", "demo": true },

@@ -91,7 +91,8 @@ if ($WritePins) {
 }
 
 if ($FetchOrt -or $env:RRADAR_FETCH_ORT -eq "1") {
-    $OrtVer = if ($env:ORT_VERSION) { $env:ORT_VERSION } else { "1.20.1" }
+    # Must match ort crate (paddle-ocr-rs / ort 2.0.0-rc.10 expects GetVersionString 1.22.x).
+    $OrtVer = if ($env:ORT_VERSION) { $env:ORT_VERSION } else { "1.22.0" }
     $zipName = "onnxruntime-win-x64-$OrtVer.zip"
     $url = "https://github.com/microsoft/onnxruntime/releases/download/v$OrtVer/$zipName"
     $tmp = Join-Path $env:TEMP "rradar-ort-$OrtVer"

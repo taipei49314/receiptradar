@@ -43,6 +43,10 @@ fetch-models:
 models-verify:
     cargo run -q -p rradar-cli -- models verify
 
+# Optional: real ONNX e2e (weights + ORT 1.22 — not default CI)
+smoke-onnx:
+    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-onnx.ps1
+
 cli-onnx *args:
     cargo run -q -p rradar-cli --features onnx -- {{args}}
 

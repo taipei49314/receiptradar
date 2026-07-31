@@ -10,6 +10,7 @@
 - `rradar serve` loopback enforcement in server; GET `/models`; demo steps for report + model pins
 
 ### Added
+- **ONNX desktop e2e:** ORT default 1.22.0; `scripts/smoke-onnx.ps1`/`.sh`; `fixtures/images/` (sidecar + synthetic receipt); demo pixel-sidecar step
 - **ONNX A05 hash pins:** committed `models/manifest.sha256` (det/rec/cls); `rradar models status|verify`; fetch-models `-WritePins`
 - **Release/CI skeleton:** locked CI + release binary smoke; GitHub Release packages (incl. macOS aarch64) with LICENSE/VERSION/checksums; `docs/INSTALL.md`; `install-from-release.sh`/`.ps1`; `rradar version --long|--json`
 - **Mobile FFI surface** (`rradar-ffi`): process path/bytes, ledger CRUD, stats/top, backup file, capabilities; `staticlib`/`cdylib`; Dart `RradarApi` mock + `docs/ffi.md`

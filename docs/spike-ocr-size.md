@@ -23,12 +23,27 @@ Record date / machine / rustc:
 
 | Field | Value |
 |-------|-------|
-| Date | |
-| CPU | |
-| rustc | |
+| Date | 2026-07-31 |
+| CPU | Windows x86_64 (dev) |
+| rustc | 1.97.1 |
 | Engine | mock |
-| p50 / p95 | see command output |
+| p50 / p95 | see `bench-ocr` |
 | Notes | Not a substitute for on-device CJK ONNX |
+
+## Desktop ONNX smoke (optional, local)
+
+```powershell
+powershell -File scripts/smoke-onnx.ps1
+```
+
+| Field | Value |
+|-------|-------|
+| Date | 2026-07-31 |
+| Engine | onnx-rapidocr (`--features onnx`) |
+| ORT | 1.22.0 load-dynamic |
+| Input | `fixtures/images/receipt_en_total89.png` (synthetic) |
+| Result | total exact 89 TWD; merchant FAMILYMART* |
+| Notes | Pin pack in `models/manifest.sha256`; not in default CI |
 
 ## Device matrix (to fill)
 

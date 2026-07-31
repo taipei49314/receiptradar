@@ -211,18 +211,6 @@ Product analytics + inbox automation + FFI analytics surface
 - All-OS CI should pass network audit again
 - Demo closed loop covers report + models; serve is explicitly local-only
 
-### Next seeds
-| Priority | Item |
-|----------|------|
-| P1 | Confirm Actions green after this push |
-| P2 | FRB when Flutter present |
-| P3 | ONNX e2e image smoke (optional nightly) with pinned models |
-
-## Rules
-- No questions between cycles unless secrets / destructive remote  
-- Green tests before re-plan  
-- Non-goals: official sync, GPT wrapper  
-
 ## Three big loops (user request 2026-07-31)
 
 1. **Schema v3** — tags + attachment_path columns, forward migration
@@ -230,3 +218,30 @@ Product analytics + inbox automation + FFI analytics surface
 3. **Handoff** — encrypted multi-device package create/info/apply (no cloud)
 
 Tag: v0.1.0-cli.11
+
+## Cycle 19 — ONNX desktop e2e + image fixtures (main axis #1 + #5)
+
+### Plan
+1. Pin ORT fetch default to **1.22.0** (match ort 2.0.0-rc.10)
+2. `fixtures/images/`: sidecar pixel path + synthetic `receipt_en_total89.png` for real OCR
+3. `scripts/smoke-onnx.ps1` / `.sh` — fetch → build onnx → verify → process
+4. Demo step for image sidecar; golden `image_sidecar_fixtures`; spike/docs
+
+### Verify
+- Local: ONNX process synthetic receipt → total 89, `engine=onnx-rapidocr`
+- `cargo test --workspace --locked` / clippy green (CI still mock-only)
+
+### Result
+- Desktop true OCR path is runnable and scripted; CI remains mock + sidecar
+
+### Next seeds
+| Priority | Item |
+|----------|------|
+| P1 | Keep CI green |
+| P2 | FRB when Flutter present |
+| P3 | Optional CI nightly job for smoke-onnx when secrets/cache allow |
+
+## Rules
+- No questions between cycles unless secrets / destructive remote  
+- Green tests before re-plan  
+- Non-goals: official sync, GPT wrapper  

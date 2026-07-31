@@ -14,8 +14,17 @@
 |------|---------|
 | `text/*.txt` | Metric (a): extract/category given perfect OCR text |
 | `mock_ocr/*.bin` | Mock “image” path: `RRADAR_MOCK_OCR` + LF/CRLF + UTF-8 lines (binary in `.gitattributes`) |
+| `images/*.png` + `*.png.ocr.txt` | Pixel path with sidecar (CI-safe, no ONNX) |
+| `images/receipt_en_total89.png` | Synthetic receipt for optional ONNX smoke |
 | `qr/*.payload.txt` | Appendix A left-QR structural decode samples |
 | `manifest.json` | Index for golden runners + **demo** flags |
+
+```bash
+# Sidecar image path (default mock engine)
+rradar process fixtures/images/familymart_photo.png --explain
+# Real ONNX (local only — scripts/smoke-onnx.ps1)
+powershell -File scripts/smoke-onnx.ps1
+```
 
 ## One-click demo
 

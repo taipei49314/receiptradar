@@ -100,8 +100,9 @@ rradar models verify   # requires weights matching models/manifest.sha256
 ```
 
 ```powershell
-powershell -File tools/fetch-models.ps1 -FetchOrt
-cargo run -p rradar-cli --features onnx -- process receipt.jpg --engine onnx --explain
+powershell -File tools/fetch-models.ps1 -FetchOrt   # ORT default 1.22.0
+powershell -File scripts/smoke-onnx.ps1              # full e2e
+cargo run -p rradar-cli --features onnx -- process fixtures/images/receipt_en_total89.png --engine onnx --explain
 ```
 
 See `models/README.md` for layout, `ORT_DYLIB_PATH`, and zh-TW notes.
