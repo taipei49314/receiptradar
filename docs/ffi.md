@@ -17,15 +17,17 @@ cargo test -p rradar-ffi
 cargo build -p rradar-ffi --release
 ```
 
-## API map (Cycle 14)
+## API map (Cycle 20)
 
 ### Identity / device
 | Function | Purpose |
 |----------|---------|
 | `api_version` | Smoke string |
 | `product_id` / `core_version` | Branding |
-| `supported_ledger_schema` | Migration ceiling |
+| `supported_ledger_schema` | Migration ceiling (v3) |
 | `default_data_dir` / `default_ledger_path` | Paths |
+| `default_inbox_path` / `ensure_inbox` | Drop folder |
+| `default_rules_path` / `ensure_rules` | Rule packs dir |
 | `capabilities_json` | Feature flags for About UI |
 
 ### Process
@@ -46,11 +48,26 @@ cargo build -p rradar-ffi --release
 | `get_transaction_json` | Show one |
 | `last_transaction_json` | Last confirmed |
 | `delete_transaction` | Delete |
-| `update_transaction_json` | Edit fields |
+| `update_transaction_json` | Edit fields (+ **tags**, **attachment_path**) |
 | `stats_all_json` / `stats_month_json` | Totals |
+| `stats_by_category_json` | Category breakdown |
+| `report_month_markdown` | Monthly report |
 | `top_merchants_json` | Rankings |
 | `categories_json` | Taxonomy ids |
-| `backup_create_file` | Encrypted backup to path |
+
+### Rules / models
+| Function | Purpose |
+|----------|---------|
+| `list_rule_packs_json` | Installed pack paths |
+| `models_pins_json` | ONNX pin status |
+
+### Backup / handoff (no cloud)
+| Function | Purpose |
+|----------|---------|
+| `backup_create_file` | Encrypted backup.rradar |
+| `handoff_create_file` | Multi-device handoff package |
+| `handoff_info_json` | Inspect handoff |
+| `handoff_apply_merge_json` | Merge into local ledger |
 
 ## Non-goals (FFI)
 
@@ -61,12 +78,15 @@ cargo build -p rradar-ffi --release
 ## FRB generation (when Flutter SDK is installed)
 
 ```bash
-# Example — adjust versions to project FRB pin when chosen
 cd apps/mobile
-flutter pub add flutter_rust_bridge
-# Point FRB at crates/rradar-ffi free functions; generate into lib/bridge/generated/
-# Link staticlib/cdylib per Android NDK + iOS later (v0.1 = Android only)
+flutter pub get
+# Install flutter_rust_bridge_codegen matching chosen FRB version
+# Point at crates/rradar-ffi free functions → lib/bridge/generated/
+# Implement NativeRradarApi with generated bindings
+# Android: cargo-ndk -t arm64-v8a -o android/app/src/main/jniLibs build -p rradar-ffi --release
 ```
+
+See [android-ffi.md](./android-ffi.md).
 
 Until generation runs:
 
@@ -82,5 +102,6 @@ Until generation runs:
 
 ## Related
 
-- [ledger-schema.md](./ledger-schema.md) — SQLite schema / multi-device backup  
+- [ledger-schema.md](./ledger-schema.md) — SQLite schema / multi-device  
+- [local-api.md](./local-api.md) — desktop loopback HTTP (not required on mobile)  
 - [apps/mobile/README.md](../apps/mobile/README.md) — Flutter shell  

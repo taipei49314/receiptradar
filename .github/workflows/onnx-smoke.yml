@@ -1,0 +1,44 @@
+# Optional desktop ONNX e2e — manual or weekly. Does NOT block default CI.
+# Requires network to fetch models + ORT; caches under models/ when possible.
+name: onnx-smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1" # Monday 06:00 UTC
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Fetch models + ORT 1.22
+        env:
+          RRADAR_FETCH_ORT: "1"
+          ORT_VERSION: "1.22.0"
+        run: |
+          chmod +x tools/fetch-models.sh scripts/smoke-onnx.sh
+          ./tools/fetch-models.sh
+
+      - name: Build + ONNX process
+        env:
+          RRADAR_MODELS_DIR: ${{ github.workspace }}/models
+          ORT_DYLIB_PATH: ${{ github.workspace }}/models/ort/libonnxruntime.so
+        run: |
+          set -euo pipefail
+          cargo build -p rradar-cli --features onnx --release
+          # Linux ORT layout may use versioned .so — pick first match
+          if [[ ! -f "$ORT_DYLIB_PATH" ]]; then
+            SO=$(find models/ort -name 'libonnxruntime.so*' | head -n1 || true)
+            if [[ -n "$SO" ]]; then export ORT_DYLIB_PATH="$SO"; fi
+          fi
+          ./target/release/rradar models verify
+          ./target/release/rradar process fixtures/images/familymart_photo.png --explain
+          ./target/release/rradar process fixtures/images/receipt_en_total89.png --engine onnx --explain
+          echo SMOKE_ONNX_OK

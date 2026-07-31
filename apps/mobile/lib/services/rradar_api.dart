@@ -12,6 +12,10 @@ class RradarCapabilities {
     required this.ledgerSchema,
     required this.cloudSync,
     required this.officialRelay,
+    required this.multiDeviceHandoff,
+    required this.rulePacks,
+    required this.localHttpServe,
+    required this.tagsAttachments,
     required this.notes,
   });
 
@@ -20,6 +24,10 @@ class RradarCapabilities {
   final int ledgerSchema;
   final bool cloudSync;
   final bool officialRelay;
+  final bool multiDeviceHandoff;
+  final bool rulePacks;
+  final bool localHttpServe;
+  final bool tagsAttachments;
   final String notes;
 
   factory RradarCapabilities.fromJson(Map<String, dynamic> j) {
@@ -29,6 +37,10 @@ class RradarCapabilities {
       ledgerSchema: (j['ledger_schema'] as num?)?.toInt() ?? 0,
       cloudSync: j['cloud_sync'] as bool? ?? false,
       officialRelay: j['official_relay'] as bool? ?? false,
+      multiDeviceHandoff: j['multi_device_handoff'] as bool? ?? false,
+      rulePacks: j['rule_packs'] as bool? ?? false,
+      localHttpServe: j['local_http_serve'] as bool? ?? false,
+      tagsAttachments: j['tags_attachments'] as bool? ?? false,
       notes: j['notes'] as String? ?? '',
     );
   }
@@ -40,6 +52,8 @@ abstract class RradarApi {
   Future<RradarCapabilities> capabilities();
   Future<List<String>> categories();
   Future<String> defaultLedgerPath();
+  Future<String> defaultInboxPath();
+  Future<String> defaultRulesPath();
 
   /// Process a filesystem path; returns draft JSON string.
   Future<String> processPath({
@@ -53,10 +67,15 @@ abstract class RradarApi {
   Future<int> count(String dbPath);
   Future<String> listJson(String dbPath, {int limit = 50});
   Future<String> statsAllJson(String dbPath);
+  Future<String> reportMonthMarkdown(String dbPath, {int year = 2024, int month = 5});
+  Future<String> listRulePacksJson();
+  Future<String> modelsPinsJson({String modelsDir = ''});
 }
 
 /// In-process mock so UI builds without native libs.
 class MockRradarApi implements RradarApi {
+  final List<Map<String, dynamic>> _tx = [];
+
   @override
   Future<String> apiVersion() async => 'receiptradar ffi mock 0.1.0-alpha.0';
 
@@ -65,10 +84,14 @@ class MockRradarApi implements RradarApi {
     return const RradarCapabilities(
       productId: 'receiptradar',
       version: '0.1.0-alpha.0',
-      ledgerSchema: 2,
+      ledgerSchema: 3,
       cloudSync: false,
       officialRelay: false,
-      notes: 'mock api — local-first; multi-device via backup file only',
+      multiDeviceHandoff: true,
+      rulePacks: true,
+      localHttpServe: true,
+      tagsAttachments: true,
+      notes: 'mock api — local-first; multi-device via backup/handoff file only',
     );
   }
 
@@ -85,8 +108,13 @@ class MockRradarApi implements RradarApi {
       ];
 
   @override
-  Future<String> defaultLedgerPath() async =>
-      'mock://receiptradar/ledger.db';
+  Future<String> defaultLedgerPath() async => 'mock://receiptradar/ledger.db';
+
+  @override
+  Future<String> defaultInboxPath() async => 'mock://receiptradar/inbox';
+
+  @override
+  Future<String> defaultRulesPath() async => 'mock://receiptradar/rules';
 
   @override
   Future<String> processPath({
@@ -95,8 +123,17 @@ class MockRradarApi implements RradarApi {
     String engine = 'mock',
     String? qrPayload,
   }) async {
-    return '{"id":"mock","merchant":{"value":"MOCK","confidence":1.0},'
-        '"total":{"value":{"amount_minor":0,"currency":"$currency"}},'
+    final id = 'mock-${_tx.length + 1}';
+    _tx.insert(0, {
+      'id': id,
+      'merchant': path.split(RegExp(r'[/\\]')).last,
+      'amount_minor': 8900,
+      'currency': currency,
+      'category': 'grocery_convenience',
+      'tags': 'mock',
+    });
+    return '{"id":"$id","merchant":{"value":"MOCK","confidence":1.0},'
+        '"total":{"value":{"amount_minor":8900,"currency":"$currency"}},'
         '"source_path":"ocr","path":"$path","engine":"$engine",'
         '"qr":${qrPayload == null ? 'null' : '"$qrPayload"'}}';
   }
@@ -105,35 +142,74 @@ class MockRradarApi implements RradarApi {
   Future<void> ensureLedger(String dbPath) async {}
 
   @override
-  Future<int> count(String dbPath) async => 0;
+  Future<int> count(String dbPath) async => _tx.length;
 
   @override
-  Future<String> listJson(String dbPath, {int limit = 50}) async => '[]';
+  Future<String> listJson(String dbPath, {int limit = 50}) async {
+    final slice = _tx.take(limit).toList();
+    // Minimal JSON array without dart:convert dependency for shell.
+    if (slice.isEmpty) return '[]';
+    final parts = slice.map((t) {
+      return '{"id":"${t['id']}","merchant":"${t['merchant']}",'
+          '"amount_minor":${t['amount_minor']},"currency":"${t['currency']}",'
+          '"category":"${t['category']}","tags":"${t['tags']}"}';
+    });
+    return '[${parts.join(',')}]';
+  }
 
   @override
-  Future<String> statsAllJson(String dbPath) async => '[]';
+  Future<String> statsAllJson(String dbPath) async {
+    if (_tx.isEmpty) return '[]';
+    var sum = 0;
+    for (final t in _tx) {
+      sum += t['amount_minor'] as int;
+    }
+    return '[{"currency":"TWD","total_minor":$sum,"count":${_tx.length}}]';
+  }
+
+  @override
+  Future<String> reportMonthMarkdown(
+    String dbPath, {
+    int year = 2024,
+    int month = 5,
+  }) async {
+    final n = _tx.length;
+    return '# ReceiptRadar report $year-${month.toString().padLeft(2, '0')}\n\n'
+        'Mock ledger: **$n** transactions.\n\n'
+        'Local-first · no cloud relay.\n';
+  }
+
+  @override
+  Future<String> listRulePacksJson() async => '[]';
+
+  @override
+  Future<String> modelsPinsJson({String modelsDir = ''}) async =>
+      '{"dir":"$modelsDir","pins_ok":false,"onnx_feature":false,"pins":[]}';
 }
 
 /// Placeholder for generated FRB bindings — throws until wired.
 class NativeRradarApi implements RradarApi {
-  @override
-  Future<String> apiVersion() async {
-    throw UnsupportedError(
-      'NativeRradarApi: generate flutter_rust_bridge bindings (docs/ffi.md)',
-    );
-  }
+  UnsupportedError get _e => UnsupportedError(
+        'NativeRradarApi: generate flutter_rust_bridge bindings (docs/ffi.md)',
+      );
 
   @override
-  Future<RradarCapabilities> capabilities() =>
-      Future.error(UnsupportedError('NativeRradarApi not linked'));
+  Future<String> apiVersion() async => throw _e;
 
   @override
-  Future<List<String>> categories() =>
-      Future.error(UnsupportedError('NativeRradarApi not linked'));
+  Future<RradarCapabilities> capabilities() async => throw _e;
 
   @override
-  Future<String> defaultLedgerPath() =>
-      Future.error(UnsupportedError('NativeRradarApi not linked'));
+  Future<List<String>> categories() async => throw _e;
+
+  @override
+  Future<String> defaultLedgerPath() async => throw _e;
+
+  @override
+  Future<String> defaultInboxPath() async => throw _e;
+
+  @override
+  Future<String> defaultRulesPath() async => throw _e;
 
   @override
   Future<String> processPath({
@@ -141,24 +217,34 @@ class NativeRradarApi implements RradarApi {
     String currency = 'TWD',
     String engine = 'mock',
     String? qrPayload,
-  }) =>
-      Future.error(UnsupportedError('NativeRradarApi not linked'));
+  }) async =>
+      throw _e;
 
   @override
-  Future<void> ensureLedger(String dbPath) =>
-      Future.error(UnsupportedError('NativeRradarApi not linked'));
+  Future<void> ensureLedger(String dbPath) async => throw _e;
 
   @override
-  Future<int> count(String dbPath) =>
-      Future.error(UnsupportedError('NativeRradarApi not linked'));
+  Future<int> count(String dbPath) async => throw _e;
 
   @override
-  Future<String> listJson(String dbPath, {int limit = 50}) =>
-      Future.error(UnsupportedError('NativeRradarApi not linked'));
+  Future<String> listJson(String dbPath, {int limit = 50}) async => throw _e;
 
   @override
-  Future<String> statsAllJson(String dbPath) =>
-      Future.error(UnsupportedError('NativeRradarApi not linked'));
+  Future<String> statsAllJson(String dbPath) async => throw _e;
+
+  @override
+  Future<String> reportMonthMarkdown(
+    String dbPath, {
+    int year = 2024,
+    int month = 5,
+  }) async =>
+      throw _e;
+
+  @override
+  Future<String> listRulePacksJson() async => throw _e;
+
+  @override
+  Future<String> modelsPinsJson({String modelsDir = ''}) async => throw _e;
 }
 
 /// App-wide default until DI / FRB lands.

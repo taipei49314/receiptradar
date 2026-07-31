@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import '../l10n/strings.dart';
 import '../services/prefs.dart';
 import '../services/rradar_api.dart';
+import 'about_screen.dart';
 import 'capture_placeholder.dart';
+import 'ledger_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, required this.prefs});
@@ -17,6 +19,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   String _status = '…';
   RradarCapabilities? _caps;
+  int _count = 0;
 
   @override
   void initState() {
@@ -28,10 +31,13 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final ver = await rradarApi.apiVersion();
       final caps = await rradarApi.capabilities();
-      final n = await rradarApi.count(await rradarApi.defaultLedgerPath());
+      final path = await rradarApi.defaultLedgerPath();
+      await rradarApi.ensureLedger(path);
+      final n = await rradarApi.count(path);
       if (!mounted) return;
       setState(() {
         _caps = caps;
+        _count = n;
         _status =
             '$ver · schema ${caps.ledgerSchema} · txs $n · cloud=${caps.cloudSync}';
       });
@@ -39,6 +45,16 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!mounted) return;
       setState(() => _status = 'core: $e');
     }
+  }
+
+  Future<void> _simulateCapture() async {
+    final path = await rradarApi.defaultLedgerPath();
+    await rradarApi.processPath(path: 'mock://capture/receipt.jpg');
+    await _loadCore();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Mock capture confirmed (API)')),
+    );
   }
 
   @override
@@ -50,13 +66,26 @@ class _HomeScreenState extends State<HomeScreen> {
         title: Text(s.homeTitle),
         actions: [
           IconButton(
-            tooltip: widget.prefs.locale == 'zh-TW' ? 'EN' : '中文',
+            tooltip: s.ledgerTitle,
             onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(s.ffiPending)),
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => LedgerScreen(strings: s),
+                ),
               );
             },
-            icon: const Icon(Icons.language),
+            icon: const Icon(Icons.list_alt),
+          ),
+          IconButton(
+            tooltip: s.aboutTitle,
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => AboutScreen(strings: s),
+                ),
+              );
+            },
+            icon: const Icon(Icons.info_outline),
           ),
         ],
       ),
@@ -66,7 +95,10 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text(s.emptyLedger, textAlign: TextAlign.center),
+              Text(
+                _count == 0 ? s.emptyLedger : '${s.ledgerTitle}: $_count',
+                textAlign: TextAlign.center,
+              ),
               const SizedBox(height: 12),
               Text(
                 s.privacyNote,
@@ -99,6 +131,12 @@ class _HomeScreenState extends State<HomeScreen> {
                       color: Theme.of(context).colorScheme.outline,
                     ),
                 textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              OutlinedButton.icon(
+                onPressed: _simulateCapture,
+                icon: const Icon(Icons.science_outlined),
+                label: const Text('Mock process (API)'),
               ),
             ],
           ),

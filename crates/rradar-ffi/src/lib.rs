@@ -13,9 +13,10 @@
 #![deny(unsafe_code)]
 
 use rradar_core::{
-    category_engine_with_packs, create_backup, data_dir, default_db_path, open_ledger_auto,
-    process_bytes, process_path, Iso4217, Ledger, ProcessOptions, TxUpdate, LEDGER_SCHEMA_VERSION,
-    PRODUCT_ID, VERSION,
+    apply_handoff_merge, category_engine_with_packs, create_backup, create_handoff, data_dir,
+    default_db_path, ensure_inbox_dir, ensure_rules_dir, inbox_dir, inspect_handoff,
+    list_rule_files, open_ledger_auto, process_bytes, process_path, rules_dir, write_handoff_file,
+    Iso4217, Ledger, ProcessOptions, TxUpdate, LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
 };
 use rradar_ocr::engine_by_name;
 use serde::Serialize;
@@ -65,6 +66,10 @@ pub fn capabilities_json() -> String {
         engines: [&'static str; 2],
         cloud_sync: bool,
         official_relay: bool,
+        multi_device_handoff: bool,
+        rule_packs: bool,
+        local_http_serve: bool,
+        tags_attachments: bool,
         notes: &'static str,
     }
     serde_json::to_string(&Caps {
@@ -74,9 +79,37 @@ pub fn capabilities_json() -> String {
         engines: ["mock", "onnx"],
         cloud_sync: false,
         official_relay: false,
-        notes: "local-first; multi-device via backup file only",
+        multi_device_handoff: true,
+        rule_packs: true,
+        local_http_serve: true,
+        tags_attachments: true,
+        notes: "local-first; multi-device via backup/handoff file only",
     })
     .unwrap_or_else(|_| "{}".into())
+}
+
+/// Default drop-folder path for capture → watch pipelines.
+pub fn default_inbox_path() -> String {
+    inbox_dir().display().to_string()
+}
+
+/// Ensure inbox directory exists; returns path.
+pub fn ensure_inbox() -> Result<String, String> {
+    ensure_inbox_dir()
+        .map(|p| p.display().to_string())
+        .map_err(|e| e.to_string())
+}
+
+/// Merchant rule packs directory.
+pub fn default_rules_path() -> String {
+    rules_dir().display().to_string()
+}
+
+/// Ensure rules dir exists; returns path.
+pub fn ensure_rules() -> Result<String, String> {
+    ensure_rules_dir()
+        .map(|p| p.display().to_string())
+        .map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -266,7 +299,7 @@ pub fn delete_transaction(
 }
 
 /// Patch transaction fields. JSON body: optional merchant, amount_minor, currency,
-/// category, notes, transacted_at. Returns updated transaction JSON.
+/// category, notes, transacted_at, tags, attachment_path. Returns updated transaction JSON.
 pub fn update_transaction_json(
     db_path: String,
     passphrase: Option<String>,
@@ -281,6 +314,8 @@ pub fn update_transaction_json(
         category: Option<String>,
         notes: Option<String>,
         transacted_at: Option<String>,
+        tags: Option<String>,
+        attachment_path: Option<String>,
     }
     let p: Patch = serde_json::from_str(&patch_json).map_err(|e| e.to_string())?;
     with_ledger(&db_path, passphrase.as_deref(), |ledger| {
@@ -294,6 +329,8 @@ pub fn update_transaction_json(
                     category: p.category,
                     notes: p.notes,
                     transacted_at: p.transacted_at,
+                    tags: p.tags,
+                    attachment_path: p.attachment_path,
                     ..Default::default()
                 },
             )
@@ -409,7 +446,51 @@ pub fn categories_json() -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Backup (local multi-device only)
+// Rules + model pins (device config)
+// ---------------------------------------------------------------------------
+
+/// List installed rule pack file paths as JSON string array.
+pub fn list_rule_packs_json() -> String {
+    let paths: Vec<String> = list_rule_files()
+        .into_iter()
+        .map(|p| p.display().to_string())
+        .collect();
+    serde_json::to_string(&paths).unwrap_or_else(|_| "[]".into())
+}
+
+/// ONNX model pin verification JSON under `models_dir` (default `./models` or env).
+pub fn models_pins_json(models_dir: String) -> Result<String, String> {
+    let dir = if models_dir.is_empty() {
+        rradar_ocr::default_models_dir()
+    } else {
+        Path::new(&models_dir).to_path_buf()
+    };
+    let checks = rradar_ocr::verify_models_dir(&dir, false).map_err(|e| e.to_string())?;
+    let pins: Vec<serde_json::Value> = checks
+        .iter()
+        .map(|c| match c {
+            rradar_ocr::PinCheck::Ok { pin, bytes } => serde_json::json!({
+                "file": pin.filename, "status": "ok", "bytes": bytes
+            }),
+            rradar_ocr::PinCheck::Missing { pin } => {
+                serde_json::json!({ "file": pin.filename, "status": "missing" })
+            }
+            rradar_ocr::PinCheck::Mismatch { pin, .. } => {
+                serde_json::json!({ "file": pin.filename, "status": "mismatch" })
+            }
+        })
+        .collect();
+    Ok(serde_json::json!({
+        "dir": dir.display().to_string(),
+        "pins_ok": rradar_ocr::all_pins_ok(&checks),
+        "onnx_feature": rradar_ocr::onnx_feature_enabled(),
+        "pins": pins,
+    })
+    .to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Backup + handoff (local multi-device only — no cloud)
 // ---------------------------------------------------------------------------
 
 /// Write encrypted backup.rradar to `out_path`. Uses fast Argon2 when
@@ -437,6 +518,52 @@ pub fn backup_create_file(
     })
 }
 
+/// Create multi-device handoff package at `out_path` (encrypted file; no cloud).
+pub fn handoff_create_file(
+    db_path: String,
+    passphrase_db: Option<String>,
+    handoff_passphrase: String,
+    device_label: String,
+    out_path: String,
+) -> Result<(), String> {
+    with_ledger(&db_path, passphrase_db.as_deref(), |ledger| {
+        let bytes = create_handoff(ledger, &handoff_passphrase, &device_label)
+            .map_err(|e| e.to_string())?;
+        write_handoff_file(Path::new(&out_path), &bytes).map_err(|e| e.to_string())?;
+        Ok(())
+    })
+}
+
+/// Inspect handoff package → manifest JSON.
+pub fn handoff_info_json(
+    handoff_passphrase: String,
+    handoff_path: String,
+) -> Result<String, String> {
+    let sealed = std::fs::read(&handoff_path).map_err(|e| e.to_string())?;
+    let man = inspect_handoff(&handoff_passphrase, &sealed).map_err(|e| e.to_string())?;
+    serde_json::to_string(&man).map_err(|e| e.to_string())
+}
+
+/// Merge handoff transactions into target ledger. Returns `{inserted, skipped, manifest}` JSON.
+pub fn handoff_apply_merge_json(
+    db_path: String,
+    passphrase_db: Option<String>,
+    handoff_passphrase: String,
+    handoff_path: String,
+) -> Result<String, String> {
+    let sealed = std::fs::read(&handoff_path).map_err(|e| e.to_string())?;
+    with_ledger(&db_path, passphrase_db.as_deref(), |ledger| {
+        let (ins, skip, man) =
+            apply_handoff_merge(&handoff_passphrase, &sealed, ledger).map_err(|e| e.to_string())?;
+        Ok(serde_json::json!({
+            "inserted": ins,
+            "skipped": skip,
+            "manifest": man,
+        })
+        .to_string())
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -453,13 +580,21 @@ mod tests {
         let caps = capabilities_json();
         assert!(caps.contains("\"cloud_sync\":false"));
         assert!(caps.contains("official_relay"));
+        assert!(caps.contains("\"multi_device_handoff\":true"));
+        assert!(caps.contains("\"rule_packs\":true"));
         assert!(!categories_json().is_empty());
+        let _ = list_rule_packs_json();
+        let _ = models_pins_json(String::new()).unwrap_or_default();
     }
 
     #[test]
     fn paths_nonempty() {
         assert!(!default_data_dir().is_empty());
         assert!(default_ledger_path().contains("ledger"));
+        assert!(!default_inbox_path().is_empty());
+        assert!(!default_rules_path().is_empty());
+        let inbox = ensure_inbox().unwrap();
+        assert!(Path::new(&inbox).is_dir() || Path::new(&inbox).exists());
     }
 
     #[test]
@@ -516,6 +651,54 @@ mod tests {
         )
         .unwrap();
         assert!(bak.is_file());
+
+        // tags (schema v3) + handoff merge roundtrip
+        let last_id: serde_json::Value = serde_json::from_str(&last).unwrap();
+        let id = last_id["id"].as_str().unwrap().to_string();
+        let patched = update_transaction_json(
+            db.display().to_string(),
+            None,
+            id,
+            r#"{"tags":"demo,ffi","notes":"from-ffi"}"#.into(),
+        )
+        .unwrap();
+        assert!(
+            patched.contains("demo") || patched.contains("from-ffi"),
+            "{patched}"
+        );
+
+        let handoff = dir.join("device.handoff");
+        handoff_create_file(
+            db.display().to_string(),
+            None,
+            "handoff-pass".into(),
+            "test-device".into(),
+            handoff.display().to_string(),
+        )
+        .unwrap();
+        let info = handoff_info_json("handoff-pass".into(), handoff.display().to_string()).unwrap();
+        assert!(
+            info.contains("rradar-handoff-v1") || info.contains("test-device"),
+            "{info}"
+        );
+
+        let db2 = dir.join("ledger2.db");
+        ensure_ledger(db2.display().to_string()).unwrap();
+        let applied = handoff_apply_merge_json(
+            db2.display().to_string(),
+            None,
+            "handoff-pass".into(),
+            handoff.display().to_string(),
+        )
+        .unwrap();
+        assert!(applied.contains("inserted"), "{applied}");
+        assert_eq!(
+            count_transactions(db2.display().to_string(), None).unwrap(),
+            1
+        );
+
+        let report = report_month_markdown(db.display().to_string(), None, 2024, 5).unwrap();
+        assert!(report.contains("2024") || report.contains("TWD") || !report.is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

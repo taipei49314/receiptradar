@@ -1,7 +1,7 @@
 # ReceiptRadar mobile (Flutter)
 
-**PR-A18 shell** — privacy onboarding + home + capture placeholder.  
-**PR-A19** Rust FFI contract lives in `crates/rradar-ffi` + `lib/services/rradar_api.dart` (FRB codegen pending).
+**PR-A18 shell** — privacy onboarding, home, ledger list, about/capabilities, capture placeholder.  
+**PR-A19** Rust contract: `crates/rradar-ffi` + `lib/services/rradar_api.dart` (FRB codegen pending).
 
 ## Requirements
 
@@ -15,7 +15,8 @@ UI (Dart)  →  RradarApi facade  →  [Mock now | FRB later]  →  rradar-ffi  
 ```
 
 - No official cloud sync / relay.
-- Multi-device: encrypted `backup.rradar` only (`backup_create_file` on FFI).
+- Multi-device: encrypted backup / **handoff** files only.
+- Schema **v3**: tags + attachment_path exposed via FFI `update_transaction_json`.
 
 ## Run (when Flutter is installed)
 
@@ -37,9 +38,12 @@ cargo test -p rradar-ffi
 | Path | Role |
 |------|------|
 | `lib/main.dart` | App entry, FLAG_SECURE intent |
-| `lib/services/rradar_api.dart` | API facade + mock |
+| `lib/services/rradar_api.dart` | API facade + mock (schema 3, handoff caps) |
+| `lib/screens/ledger_screen.dart` | Transaction list |
+| `lib/screens/about_screen.dart` | Capabilities / paths |
 | `lib/bridge/README.md` | FRB wiring notes |
 | `../../docs/ffi.md` | Full FFI function map |
+| `../../docs/android-ffi.md` | NDK / cargo-ndk notes |
 | `../../crates/rradar-ffi` | Rust free functions |
 
 ## Platform notes
@@ -49,4 +53,4 @@ cargo test -p rradar-ffi
 | FLAG_SECURE default ON | Method channel in A21 |
 | Offline flavor no INTERNET | productFlavors in A22 |
 | `process_image_bytes_json` | Camera → draft (FFI ready) |
-| `process_receipt_path_json` | File / share-sheet path |
+| `handoff_*` | Multi-device file package (FFI ready) |

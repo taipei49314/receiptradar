@@ -234,12 +234,27 @@ Tag: v0.1.0-cli.11
 ### Result
 - Desktop true OCR path is runnable and scripted; CI remains mock + sidecar
 
+## Cycle 20 — Mobile/FFI surface for v3 + handoff/rules (main axis #3)
+
+### Plan
+1. Expand `rradar-ffi`: inbox/rules paths, tags/attachment patch, handoff create/info/merge, models pins, richer capabilities
+2. Dart `RradarApi` mock + Ledger/About screens; strings update
+3. `docs/ffi.md` / `docs/android-ffi.md`; optional `onnx-smoke` workflow (dispatch/weekly)
+
+### Verify
+- `cargo test -p rradar-ffi` / workspace / clippy green  
+- CI default remains mock-only  
+
+### Result
+- Mobile shell exercises ledger/about against mock API matching Rust contract  
+- FRB still deferred (no Flutter SDK); NDK notes ready  
+
 ### Next seeds
 | Priority | Item |
 |----------|------|
-| P1 | Keep CI green |
-| P2 | FRB when Flutter present |
-| P3 | Optional CI nightly job for smoke-onnx when secrets/cache allow |
+| P1 | Keep CI + weekly onnx-smoke green |
+| P2 | FRB generate when Flutter present |
+| P3 | Attachments UX + camera → process_image_bytes_json |
 
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
