@@ -13,7 +13,7 @@
 | Path | Purpose |
 |------|---------|
 | `text/*.txt` | Metric (a): extract/category given perfect OCR text |
-| `mock_ocr/*.bin` | Mock “image” path: `RRADAR_MOCK_OCR\n` + UTF-8 lines (no real pixels) |
+| `mock_ocr/*.bin` | Mock “image” path: `RRADAR_MOCK_OCR` + LF/CRLF + UTF-8 lines (binary in `.gitattributes`) |
 | `qr/*.payload.txt` | Appendix A left-QR structural decode samples |
 | `manifest.json` | Index for golden runners + **demo** flags |
 

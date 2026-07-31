@@ -79,6 +79,13 @@ fn golden_mock_ocr_binaries() {
 
     for fx in manifest.mock_ocr_fixtures {
         let path = root.join(&fx.path);
+        let raw = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", fx.path));
+        assert!(
+            raw.starts_with(b"RRADAR_MOCK_OCR"),
+            "{} missing mock magic (got {} bytes)",
+            fx.path,
+            raw.len()
+        );
         let currency = Iso4217::parse(&fx.expect_currency).expect("currency");
         let draft = process_path(
             &path,
@@ -91,9 +98,11 @@ fn golden_mock_ocr_binaries() {
         )
         .unwrap_or_else(|e| panic!("{}: {e}", fx.path));
         assert_eq!(
-            draft.total.value.amount_minor, fx.expect_total_minor,
-            "{} total",
-            fx.path
+            draft.total.value.amount_minor,
+            fx.expect_total_minor,
+            "{} total (raw head={:02x?})",
+            fx.path,
+            &raw[..raw.len().min(24)]
         );
         assert_eq!(
             draft.total.value.currency.to_string(),
@@ -102,6 +111,38 @@ fn golden_mock_ocr_binaries() {
             fx.path
         );
     }
+}
+
+#[test]
+fn mock_ocr_crlf_checkout_tolerated() {
+    // Simulate Windows autocrlf rewriting the magic terminator to CRLF.
+    let bytes = b"RRADAR_MOCK_OCR\r\nSTARBUCKS COFFEE\r\nTOTAL $5.45\r\n2024-07-04\r\n";
+    let dir = std::env::temp_dir().join(format!("rradar-mock-crlf-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("sb.bin");
+    std::fs::write(&path, bytes).unwrap();
+    let eng = MockOcrEngine;
+    let cats = CategoryEngine::with_seed();
+    let draft = process_path(
+        &path,
+        &eng,
+        &cats,
+        ProcessOptions {
+            default_currency: Iso4217::USD,
+            ..Default::default()
+        },
+    )
+    .expect("crlf mock");
+    assert_eq!(draft.total.value.amount_minor, 545);
+    assert!(
+        draft
+            .merchant
+            .value
+            .to_ascii_uppercase()
+            .contains("STARBUCKS")
+            || draft.raw_text.contains("STARBUCKS")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

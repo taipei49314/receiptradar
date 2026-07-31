@@ -146,10 +146,25 @@
 ### Result
 - Tag `v*` → 4 platform artifacts with checksums; CI gates include release-shaped build  
 
+## Cycle 16 — CI green on Windows (main axis #4 fix)
+
+### Plan
+1. Diagnose `golden_mock_ocr_binaries` failure on windows-latest (8900 vs 545)
+2. Root cause: mock magic required LF; Git autocrlf could rewrite fixtures
+3. Fix: `.gitattributes` binary for `fixtures/mock_ocr/**`; resilient LF/CRLF magic strip in ocr + pipeline
+4. Add CRLF unit/golden coverage; harden CI release smoke bash on Windows
+
+### Verify
+- `cargo test --workspace --locked` green  
+- `cargo clippy --workspace --all-targets -- -D warnings` green  
+
+### Result
+- Windows CI should pass mock OCR fixtures; demo/matrix stay reliable  
+
 ### Next seeds
 | Priority | Item |
 |----------|------|
-| P1 | Keep CI green on all matrix OS |
+| P1 | Confirm Actions green after this push |
 | P2 | FRB when Flutter present |
 | P3 | ONNX hash pin after trusted model download |
 

@@ -51,11 +51,13 @@ jobs:
         run: cargo run -p rradar-cli --locked -- demo --fixtures fixtures --db target/ci-demo/ledger.db --quiet
 
       - name: release binary smoke
-        run: |
-          cargo build --release -p rradar-cli --locked
-          ./target/release/rradar version --long
-          ./target/release/rradar demo --fixtures fixtures --db target/ci-release-demo/ledger.db --quiet
         shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release -p rradar-cli --locked
+          if [[ -f target/release/rradar.exe ]]; then B=target/release/rradar.exe; else B=target/release/rradar; fi
+          "$B" version --long
+          "$B" demo --fixtures fixtures --db target/ci-release-demo/ledger.db --quiet
 
       - name: network audit
         run: python tools/network-audit/check_offline_deps.py

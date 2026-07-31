@@ -1,0 +1,13 @@
+# Normalize text; keep fixture payloads byte-stable across OS.
+* text=auto eol=lf
+
+# Mock OCR "image" payloads — must stay binary (magic ends with 0x0A, not CRLF).
+fixtures/mock_ocr/** binary
+*.bin binary
+*.onnx binary
+*.rradar binary
+*.rrsealed binary
+
+# Shell scripts always LF
+*.sh text eol=lf
+Justfile text eol=lf

@@ -7,11 +7,9 @@ use crate::money::{Iso4217, Money};
 use crate::preprocess::{preprocess, PreprocessConfig};
 use crate::qr::{date_field, invoice_id_field, parse_tw_einvoice_left_qr, total_field};
 use crate::types::{Field, FieldSource, ReceiptDraft, SourcePath, TextBlock};
-use rradar_ocr::{OcrEngine, OcrError};
+use rradar_ocr::{strip_mock_ocr_magic, OcrEngine, OcrError};
 use std::path::Path;
 use thiserror::Error;
-
-const MOCK_OCR_MAGIC: &[u8] = b"RRADAR_MOCK_OCR\n";
 
 #[derive(Debug, Error)]
 pub enum ProcessError {
@@ -63,8 +61,9 @@ pub fn process_path(
         .unwrap_or(false)
     {
         Some(String::from_utf8_lossy(&bytes).into_owned())
-    } else if bytes.starts_with(MOCK_OCR_MAGIC) {
-        Some(String::from_utf8_lossy(&bytes[MOCK_OCR_MAGIC.len()..]).into_owned())
+    } else if let Some(payload) = strip_mock_ocr_magic(&bytes) {
+        // Accept LF or CRLF after magic so Windows autocrlf checkouts still work.
+        Some(String::from_utf8_lossy(payload).into_owned())
     } else if sidecar.is_file() {
         Some(std::fs::read_to_string(&sidecar)?)
     } else if sidecar2.is_file() {

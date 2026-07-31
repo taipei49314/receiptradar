@@ -45,12 +45,27 @@ pub enum OcrError {
 
 /// Deterministic mock engine for CI and parser unit tests.
 ///
-/// If bytes start with `RRADAR_MOCK_OCR\n`, remaining UTF-8 lines are returned.
+/// If bytes start with `RRADAR_MOCK_OCR` + LF or CRLF, remaining UTF-8 lines are returned.
 /// Otherwise returns a fixed FamilyMart-style receipt.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MockOcrEngine;
 
-const MAGIC: &[u8] = b"RRADAR_MOCK_OCR\n";
+const MAGIC_PREFIX: &[u8] = b"RRADAR_MOCK_OCR";
+
+/// Returns payload after mock OCR magic, accepting `\n` or `\r\n` terminators.
+pub fn strip_mock_ocr_magic(image_bytes: &[u8]) -> Option<&[u8]> {
+    if !image_bytes.starts_with(MAGIC_PREFIX) {
+        return None;
+    }
+    let rest = &image_bytes[MAGIC_PREFIX.len()..];
+    if rest.starts_with(b"\r\n") {
+        Some(&rest[2..])
+    } else if rest.starts_with(b"\n") {
+        Some(&rest[1..])
+    } else {
+        None
+    }
+}
 
 impl OcrEngine for MockOcrEngine {
     fn name(&self) -> &'static str {
@@ -61,8 +76,8 @@ impl OcrEngine for MockOcrEngine {
         if image_bytes.is_empty() {
             return Err(OcrError::EmptyInput);
         }
-        if image_bytes.starts_with(MAGIC) {
-            let text = String::from_utf8_lossy(&image_bytes[MAGIC.len()..]);
+        if let Some(payload) = strip_mock_ocr_magic(image_bytes) {
+            let text = String::from_utf8_lossy(payload);
             let lines: Vec<OcrLine> = text
                 .lines()
                 .filter(|l| !l.trim().is_empty())
@@ -141,10 +156,19 @@ mod tests {
 
     #[test]
     fn mock_magic_payload() {
-        let mut bytes = MAGIC.to_vec();
+        let mut bytes = b"RRADAR_MOCK_OCR\n".to_vec();
         bytes.extend_from_slice("HELLO\n合計 12\n".as_bytes());
         let lines = MockOcrEngine.recognize(&bytes).unwrap();
         assert_eq!(lines[0].text, "HELLO");
+    }
+
+    #[test]
+    fn mock_magic_crlf_payload() {
+        let mut bytes = b"RRADAR_MOCK_OCR\r\n".to_vec();
+        bytes.extend_from_slice(b"STARBUCKS\r\nTOTAL $5.45\r\n");
+        let lines = MockOcrEngine.recognize(&bytes).unwrap();
+        assert_eq!(lines[0].text, "STARBUCKS");
+        assert!(lines.iter().any(|l| l.text.contains("5.45")));
     }
 
     #[test]

@@ -463,11 +463,16 @@ mod tests {
         let ver = ledger_schema_version(db.display().to_string(), None).unwrap();
         assert_eq!(ver, "2");
 
-        // mock image path bytes
+        // mock image path bytes (LF)
         let mut magic = b"RRADAR_MOCK_OCR\n".to_vec();
         magic.extend_from_slice("測試店\n合計 42\n2024-01-02\n".as_bytes());
         let d2 = process_image_bytes_json(magic, "TWD".into(), "mock".into(), None).unwrap();
         assert!(d2.contains("42"), "{d2}");
+        // CRLF terminator (Windows checkout tolerance)
+        let mut crlf = b"RRADAR_MOCK_OCR\r\n".to_vec();
+        crlf.extend_from_slice(b"SHOP\r\nTOTAL $1.25\r\n");
+        let d3 = process_image_bytes_json(crlf, "USD".into(), "mock".into(), None).unwrap();
+        assert!(d3.contains("125") || d3.contains("1.25"), "{d3}");
 
         let bak = dir.join("t.rradar");
         std::env::set_var("RRADAR_FAST_BACKUP", "1");
