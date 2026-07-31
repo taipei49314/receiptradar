@@ -63,8 +63,9 @@ rradar help
 | At-rest seal | `seal` / `unseal` |
 | TW e-invoice QR | `--qr` / `--qr-file` |
 | Monthly report | `report` |
-| Drop folder watch | `inbox` + `watch` |
-| Local HTTP API | `serve` (127.0.0.1 only) |
+| Drop folder watch | `inbox` + `watch [--attach]` |
+| Local HTTP API | `serve` / `api-smoke` (127.0.0.1 only) |
+| Attach receipt file | `attach` / `process --attach` |
 
 **Never** sums different currencies together. Local API: [docs/local-api.md](./docs/local-api.md).
 

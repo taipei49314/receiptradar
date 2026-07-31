@@ -55,6 +55,7 @@ fn main() -> ExitCode {
         "watch" => cmd_watch(&args[1..]),
         "inbox" => cmd_inbox(&args[1..]),
         "serve" => cmd_serve(&args[1..]),
+        "api-smoke" => cmd_api_smoke(&args[1..]),
         "recategorize" => cmd_recategorize(&args[1..]),
         "clear" => cmd_clear(&args[1..]),
         "categories" | "cats" => cmd_categories(),
@@ -645,6 +646,36 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
         }
     }
 
+    step(12, "local HTTP API smoke (loopback only)");
+    let api_fixture = fixtures.join("text/familymart_89.txt");
+    // Use a dedicated smoke ledger so demo count stays stable for DEMO_OK messaging.
+    let api_db = out_dir.join("demo-api-smoke.db");
+    if api_db.is_file() {
+        let _ = std::fs::remove_file(&api_db);
+    }
+    let api_att = attachments_root_for_db(&api_db);
+    if api_att.is_dir() {
+        let _ = std::fs::remove_dir_all(&api_att);
+    }
+    let _ = rradar_core::Ledger::open(&api_db).map_err(|e| e.to_string())?;
+    match serve::smoke_local_api(&api_db, &api_fixture, None) {
+        Ok(rep) => {
+            if !quiet {
+                println!(
+                    "  ✓ bind={} health={} caps={} process={} attach={} txs={} stats={}",
+                    rep.bind,
+                    rep.health_ok,
+                    rep.capabilities_ok,
+                    rep.process_confirmed,
+                    rep.attachment_set,
+                    rep.transactions_n,
+                    rep.stats_ok
+                );
+            }
+        }
+        Err(e) => return Err(format!("demo local API smoke failed: {e}")),
+    }
+
     if !quiet {
         println!();
         println!("DEMO_OK — closed loop finished ({n} rows in demo ledger).");
@@ -653,11 +684,12 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
             "      rradar report --year 2024 --month 5 --db {}",
             demo_db.display()
         );
-        println!("      rradar inbox --ensure && rradar watch --once");
+        println!("      rradar inbox --ensure && rradar watch --once --attach");
         println!(
             "      rradar serve --db {}   # loopback HTTP only",
             demo_db.display()
         );
+        println!("      rradar api-smoke --fixtures fixtures");
         println!("      powershell -File scripts/smoke-onnx.ps1  # optional real ONNX e2e");
         println!("Record tip: capture this command output as a terminal GIF for README.");
     } else {
@@ -1807,12 +1839,75 @@ fn cmd_serve(args: &[String]) -> Result<(), String> {
     })
 }
 
+/// Ephemeral loopback API smoke (health → process+attach → list → stats).
+fn cmd_api_smoke(args: &[String]) -> Result<(), String> {
+    let mut fixtures_root: Option<PathBuf> = None;
+    let mut db_override: Option<PathBuf> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--fixtures" => {
+                i += 1;
+                fixtures_root = Some(PathBuf::from(args.get(i).ok_or("--fixtures needs path")?));
+            }
+            "--db" => {
+                i += 1;
+                db_override = Some(PathBuf::from(args.get(i).ok_or("--db needs path")?));
+            }
+            "--help" | "-h" => {
+                println!(
+                    "rradar api-smoke [--fixtures DIR] [--db PATH]\n  \
+                     Spawns ephemeral 127.0.0.1 server; exercises product HTTP surface.\n  \
+                     Local-only; no cloud. See docs/local-api.md."
+                );
+                return Ok(());
+            }
+            other => return Err(format!("unknown api-smoke flag `{other}`")),
+        }
+        i += 1;
+    }
+    let fixtures = fixtures_root
+        .or_else(|| env::var_os("RRADAR_FIXTURES").map(PathBuf::from))
+        .unwrap_or_else(find_fixtures_dir);
+    let fixture = fixtures.join("text/familymart_89.txt");
+    let db = db_override.unwrap_or_else(|| {
+        let home = data_dir().join("api-smoke");
+        let _ = std::fs::create_dir_all(&home);
+        home.join("ledger.db")
+    });
+    if let Some(parent) = db.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if db.is_file() {
+        let _ = std::fs::remove_file(&db);
+    }
+    let att = attachments_root_for_db(&db);
+    if att.is_dir() {
+        let _ = std::fs::remove_dir_all(&att);
+    }
+    let _ = rradar_core::Ledger::open(&db).map_err(|e| e.to_string())?;
+    let rep = serve::smoke_local_api(&db, &fixture, None)?;
+    println!("API_SMOKE_OK bind={}", rep.bind);
+    println!(
+        "  health={} capabilities={} process={} attach={} txs={} stats={}",
+        rep.health_ok,
+        rep.capabilities_ok,
+        rep.process_confirmed,
+        rep.attachment_set,
+        rep.transactions_n,
+        rep.stats_ok
+    );
+    println!("  db | {}", db.display());
+    Ok(())
+}
+
 fn cmd_watch(args: &[String]) -> Result<(), String> {
-    // rradar watch [dir] [--interval 2] [--once]  — default dir = inbox
+    // rradar watch [dir] [--interval 2] [--once] [--attach]  — default dir = inbox
     let mut dir: Option<PathBuf> = None;
     let mut interval_secs: u64 = 2;
     let mut confirm = true;
     let mut once = false;
+    let mut attach = false;
     let mut engine = "mock".to_string();
     let mut i = 0;
     while i < args.len() {
@@ -1827,6 +1922,7 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
             }
             "--no-confirm" => confirm = false,
             "--once" => once = true,
+            "--attach" => attach = true,
             "--engine" => {
                 i += 1;
                 engine = args.get(i).ok_or("needs engine")?.clone();
@@ -1884,6 +1980,9 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
                 if confirm {
                     proc_args.push("--confirm".into());
                     proc_args.push("-q".into());
+                    if attach {
+                        proc_args.push("--attach".into());
+                    }
                 }
                 proc_args.push("--engine".into());
                 proc_args.push(engine.clone());
@@ -1894,7 +1993,11 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
                         proc_args.push(db.to_string());
                     }
                 }
-                println!("watch | processing {}", path.display());
+                println!(
+                    "watch | processing {}{}",
+                    path.display(),
+                    if attach { " (+attach)" } else { "" }
+                );
                 // call process logic by reconstructing argv
                 if let Err(e) = cmd_process(&proc_args) {
                     eprintln!("watch | error: {e}");
@@ -2596,10 +2699,15 @@ unseal --in file.rrsealed -o ledger.db -p PASS
         "demo" => "\
 demo [--fixtures DIR] [--db PATH] [--no-backup] [--quiet]
   Isolated closed-loop demo for recording / CI:
-  text + mock_ocr fixtures → confirm → list/stats/top → export → backup.
+  text + mock_ocr + attach/tags → export → backup → report → local API smoke.
   Default demo db: %APPDATA%/receiptradar/demo/ledger.db (fresh each run).
   Does not touch the default user ledger unless --db or RRADAR_DB is set.
   RRADAR_FIXTURES overrides fixtures root discovery.",
+        "serve" | "api-smoke" => "\
+serve [--bind 127.0.0.1:7432] [--db PATH]
+  Loopback-only HTTP API (no cloud). See docs/local-api.md.
+api-smoke [--fixtures DIR] [--db PATH]
+  Spawns ephemeral 127.0.0.1 server; process+attach+list+stats.",
         "init" | "doctor" | "path" | "config" => "\
 init     create data dir + empty ledger + default config.toml
 config [show|set default_currency TWD|set list_limit 50]
@@ -2658,8 +2766,9 @@ Commands:
   top                  Top merchants by spend (one currency)
   report               Markdown monthly report (-o file.md)
   inbox [--ensure]     Show default drop folder (RRADAR_INBOX)
-  watch [dir]          Auto-process new files (default: inbox)
+  watch [dir]          Auto-process new files (default: inbox; --attach)
   serve [--bind 127.0.0.1:7432]  Local-only HTTP API
+  api-smoke            Ephemeral loopback product API closed-loop
   recategorize         Re-run category rules (default: only `other`)
   clear --yes          Wipe all transactions
   categories           List category ids

@@ -36,8 +36,8 @@ rradar demo --quiet          # CI-friendly
 powershell -File scripts/demo.ps1
 ```
 
-Covers: text + mock_ocr + TW QR → confirm → list/stats/top → export → backup → **monthly report** → model pin status.  
-Next steps printed: `inbox`/`watch`, `serve` (loopback HTTP — [local-api.md](./local-api.md)).
+Covers: text + mock_ocr + TW QR → **attach/tags** → list/stats/top → export → backup → monthly report → model pins → **local API smoke**.  
+Next steps: `inbox`/`watch --attach`, `serve` / `api-smoke` ([local-api.md](./local-api.md)).
 
 ## Daily workflow
 

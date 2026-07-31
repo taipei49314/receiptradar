@@ -10,8 +10,11 @@
 - `rradar serve` loopback enforcement in server; GET `/models`; demo steps for report + model pins
 - CSV export includes `tags` and `attachment_path` columns
 - Backup/handoff packages optionally pack `attachments/**` blobs; restore rehydrates them
+- Local HTTP API expanded for product demo automation (capabilities, paths, attach, process flags)
 
 ### Added
+- **Local API product smoke:** `rradar api-smoke`; `serve` GET `/capabilities` `/paths` `/transaction`; POST `/process` `{attach,tags}` + POST `/attach`; demo step 12; `watch --attach`
+- Mobile **capture mock closed-loop** (process → ledger via MockRradarApi)
 - **Attachment store (schema v3 lifecycle):** `{db_parent}/attachments/{tx_id}/…` with relative DB paths; `rradar attach` / `detach`; `process --confirm --attach --tags`; backup `attachment_count`; FFI `attach_file_json` / `detach_file_json`
 - **Mobile FFI v3 surface:** handoff create/info/merge, rules/inbox paths, tags/attachment patch, models pins JSON; Dart Ledger/About screens; `docs/android-ffi.md`; optional weekly `onnx-smoke` workflow
 - **ONNX desktop e2e:** ORT default 1.22.0; `scripts/smoke-onnx.ps1`/`.sh`; `fixtures/images/` (sidecar + synthetic receipt); demo pixel-sidecar step

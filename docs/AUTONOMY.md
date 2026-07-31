@@ -279,8 +279,32 @@ Tag: v0.1.0-cli.11
 | P2 | Mobile camera → process_image_bytes + attach (needs Flutter/NDK) |
 | P3 | Optional SQLCipher P1 when NDK available |
 
+## Cycle 22 — product demo closed-loop via local API (main axis #5)
+
+### Plan
+1. Expand loopback `serve` to product surface (capabilities/paths/transaction/attach/process flags)
+2. Ephemeral `api-smoke` + demo step 12; unit test smoke over TcpStream
+3. `watch --attach`; mobile capture mock closed-loop
+4. Docs `local-api.md` / AUTONOMY / CHANGELOG
+
+### Verify
+- `cargo test --workspace --locked` / clippy green (incl. `api_smoke_process_attach_and_list`)
+- `rradar demo --quiet` still `DEMO_OK`
+
+### Result
+- Recordable path: fixtures → ledger → backup → **local HTTP product smoke** without curl  
+- Capture screen demos mock process→ledger until FRB/camera  
+
+### Next seeds
+| Priority | Item |
+|----------|------|
+| P1 | README terminal GIF from `rradar demo` output |
+| P2 | FRB + camera when Flutter/NDK present |
+| P3 | ONNX weekly smoke keep green |
+
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
 - Green tests before re-plan  
 - Non-goals: official sync, GPT wrapper  
+
 
