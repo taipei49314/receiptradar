@@ -458,10 +458,32 @@ Tag: v0.1.0-cli.11
 | P2 | cargo-deny dual gate optional |
 | P3 | Device A04 when Android available |
 
+## Cycle 30 — year analytics + merchant aliases (main axis #2)
+
+### Plan
+1. `stats_by_currency_year` / year-months; `annual_markdown` with alias-aware top merchants
+2. CLI `report --year` (annual), `stats --year`, `rradar aliases`
+3. Backup pack/restore `merchant_aliases.toml`; demo annual step
+4. FFI `report_year_markdown` / `aliases_json`
+
+### Verify
+- `cargo test --workspace --locked` / clippy green (incl. `annual_report_spans_months`)
+
+### Result
+- Year close / YTD product path without cloud; local rename map travels in backup  
+
+### Next seeds
+| Priority | Item |
+|----------|------|
+| P1 | FRB when Flutter present |
+| P2 | More TW fixtures / showcase GIF |
+| P3 | cargo-deny optional dual gate |
+
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
 - Green tests before re-plan  
 - Non-goals: official sync, GPT wrapper  
+
 
 
 

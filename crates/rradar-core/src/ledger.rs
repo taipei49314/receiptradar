@@ -992,6 +992,75 @@ impl Ledger {
         Ok(out)
     }
 
+    /// Per-currency totals for a full calendar year (no cross-currency sum).
+    pub fn stats_by_currency_year(&self, year: i32) -> Result<Vec<CurrencyMonthStat>, LedgerError> {
+        let prefix = format!("{year:04}");
+        let mut stmt = self.conn.prepare(
+            r#"SELECT currency, SUM(amount_minor), COUNT(*)
+               FROM transactions
+               WHERE substr(transacted_at,1,4) = ?1
+               GROUP BY currency
+               ORDER BY currency"#,
+        )?;
+        let rows = stmt.query_map(params![prefix], |r| {
+            Ok(CurrencyMonthStat {
+                currency: r.get(0)?,
+                year,
+                month: 0,
+                total_minor: r.get(1)?,
+                count: r.get(2)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// Per-currency monthly rows within one calendar year (for annual heatmaps).
+    pub fn stats_by_currency_year_months(
+        &self,
+        year: i32,
+    ) -> Result<Vec<CurrencyMonthStat>, LedgerError> {
+        let prefix = format!("{year:04}");
+        let mut stmt = self.conn.prepare(
+            r#"SELECT currency,
+                      CAST(substr(transacted_at,6,2) AS INTEGER),
+                      SUM(amount_minor),
+                      COUNT(*)
+               FROM transactions
+               WHERE substr(transacted_at,1,4) = ?1
+               GROUP BY currency, substr(transacted_at,1,7)
+               ORDER BY currency, substr(transacted_at,1,7)"#,
+        )?;
+        let rows = stmt.query_map(params![prefix], |r| {
+            let month: i64 = r.get(1)?;
+            Ok(CurrencyMonthStat {
+                currency: r.get(0)?,
+                year,
+                month: month as u32,
+                total_minor: r.get(2)?,
+                count: r.get(3)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// Rewrite merchant field for all rows matching exact `from` → `to`.
+    pub fn rewrite_merchant(&self, from: &str, to: &str) -> Result<usize, LedgerError> {
+        let now = crate::pipeline::utc_now_iso();
+        let n = self.conn.execute(
+            "UPDATE transactions SET merchant = ?2, updated_at = ?3 WHERE merchant = ?1",
+            params![from, to, now],
+        )?;
+        Ok(n)
+    }
+
     /// Serialize DB file bytes (for backup). In-memory DBs are dumped via VACUUM INTO temp.
     pub fn export_sqlite_bytes(&self) -> Result<Vec<u8>, LedgerError> {
         if self.path == Path::new(":memory:") || self.path.as_os_str().is_empty() {

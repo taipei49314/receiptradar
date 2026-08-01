@@ -3,16 +3,17 @@
 mod serve;
 
 use rradar_core::{
-    apply_edits, apply_handoff_merge, attachments_root_for_db, budget_status_month,
-    category_engine_with_packs, create_backup, create_handoff, data_dir, default_db_path,
-    ensure_data_dir, ensure_inbox_dir, ensure_rules_dir, inbox_dir, inspect_backup,
-    inspect_handoff, install_rule_pack, list_rule_files, monthly_markdown,
+    annual_markdown, apply_edits, apply_handoff_merge, attachments_root_for_db,
+    budget_status_month, category_engine_with_packs, create_backup, create_handoff, data_dir,
+    default_db_path, ensure_data_dir, ensure_inbox_dir, ensure_rules_dir, inbox_dir,
+    inspect_backup, inspect_handoff, install_rule_pack, list_rule_files, monthly_markdown,
     monthly_markdown_with_budgets, normalize_tags, open_ledger_auto, process_path,
     remove_stored_attachment, resolve_attachment_path, restore_backup, rules_dir, save_sealed,
     store_attachment, transactions_from_backup, transactions_to_csv, transactions_to_json,
-    verify_backup, write_handoff_file, write_restored_attachments, write_restored_budgets,
-    write_restored_db, AppConfig, BudgetBook, Iso4217, Money, ProcessOptions, ReceiptDraft,
-    Transaction, TxFilter, TxUpdate, UserEdits, LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
+    verify_backup, write_handoff_file, write_restored_aliases, write_restored_attachments,
+    write_restored_budgets, write_restored_db, AliasBook, AppConfig, BudgetBook, Iso4217, Money,
+    ProcessOptions, ReceiptDraft, Transaction, TxFilter, TxUpdate, UserEdits,
+    LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
 };
 use rradar_ocr::engine_by_name;
 use std::env;
@@ -49,6 +50,7 @@ fn main() -> ExitCode {
         "count" => cmd_count(&args[1..]),
         "tags" => cmd_tags(&args[1..]),
         "budget" => cmd_budget(&args[1..]),
+        "aliases" | "alias" => cmd_aliases(&args[1..]),
         "last" | "undo" => cmd_last_or_undo(&args[0], &args[1..]),
         "show" => cmd_show(&args[1..]),
         "delete" | "rm" => cmd_delete(&args[1..]),
@@ -919,7 +921,25 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
         }
     }
 
-    step(11, "ONNX model pin status (weights optional)");
+    step(11, "annual report + merchant alias (local)");
+    // Seed a display alias for demo narrative (does not rewrite ledger unless apply).
+    let mut demo_aliases = AliasBook::default();
+    demo_aliases.set("FAMILYMART", "全家");
+    demo_aliases.set("全家", "全家");
+    let annual =
+        rradar_core::annual_markdown_with_books(&ledger, 2024, &demo_budgets, &demo_aliases)
+            .map_err(|e| e.to_string())?;
+    let annual_path = out_dir.join("demo-report-2024-annual.md");
+    std::fs::write(&annual_path, &annual).map_err(|e| e.to_string())?;
+    if !quiet {
+        println!("  annual | {}", annual_path.display());
+        println!("  alias  | FAMILYMART → 全家 (report display; rradar aliases apply to rewrite)");
+        for line in annual.lines().take(8) {
+            println!("  | {line}");
+        }
+    }
+
+    step(12, "ONNX model pin status (weights optional)");
     let models_dir = rradar_ocr::default_models_dir();
     match rradar_ocr::verify_models_dir(&models_dir, false) {
         Ok(checks) if checks.is_empty() => {
@@ -944,7 +964,7 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
         }
     }
 
-    step(12, "local HTTP API smoke (loopback only)");
+    step(13, "local HTTP API smoke (loopback only)");
     let api_fixture = fixtures.join("text/familymart_89.txt");
     // Use a dedicated smoke ledger so demo count stays stable for DEMO_OK messaging.
     let api_db = out_dir.join("demo-api-smoke.db");
@@ -1481,8 +1501,10 @@ fn cmd_import(args: &[String]) -> Result<(), String> {
                 write_restored_attachments(ledger.path(), &restored).map_err(|e| e.to_string())?;
             let bud =
                 write_restored_budgets(ledger.path(), &restored).map_err(|e| e.to_string())?;
+            let ali =
+                write_restored_aliases(ledger.path(), &restored).map_err(|e| e.to_string())?;
             println!(
-                "import backup | inserted={ins} skipped={skip} attachments={att_n} budgets={bud} (from {} txs; multi-device via backup only)",
+                "import backup | inserted={ins} skipped={skip} attachments={att_n} budgets={bud} aliases={ali} (from {} txs; multi-device via backup only)",
                 rows.len()
             );
             maybe_reseal(&flags, &ledger, tmp)?;
@@ -2376,6 +2398,46 @@ fn cmd_stats(args: &[String]) -> Result<(), String> {
         ledger
             .stats_by_currency_range(f, t)
             .map_err(|e| e.to_string())?
+    } else if let (Some(y), None) = (year, month) {
+        // Full calendar year (no month)
+        println!("period | year {y:04}");
+        let year_tot = ledger
+            .stats_by_currency_year(y)
+            .map_err(|e| e.to_string())?;
+        let months = ledger
+            .stats_by_currency_year_months(y)
+            .map_err(|e| e.to_string())?;
+        if year_tot.is_empty() {
+            println!("(no transactions)");
+        } else {
+            for s in &year_tot {
+                let major = Money::new(
+                    s.total_minor,
+                    Iso4217::parse(&s.currency).unwrap_or(Iso4217::TWD),
+                )
+                .display_major();
+                println!(
+                    "{} year | {} | count={} | minor={}",
+                    s.currency, major, s.count, s.total_minor
+                );
+            }
+            for s in &months {
+                let major = Money::new(
+                    s.total_minor,
+                    Iso4217::parse(&s.currency).unwrap_or(Iso4217::TWD),
+                )
+                .display_major();
+                println!(
+                    "{} {:04}-{:02} | {} | count={} | minor={}",
+                    s.currency, s.year, s.month, major, s.count, s.total_minor
+                );
+            }
+            println!("note | currencies are never summed together");
+        }
+        if let Some(t) = tmp {
+            let _ = std::fs::remove_file(t);
+        }
+        return Ok(());
     } else {
         let (y, m) = match (year, month) {
             (Some(y), Some(m)) => (y, m),
@@ -2412,6 +2474,7 @@ fn cmd_report(args: &[String]) -> Result<(), String> {
     let mut year: Option<i32> = None;
     let mut month: Option<u32> = None;
     let mut out: Option<PathBuf> = None;
+    let mut annual = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -2433,6 +2496,7 @@ fn cmd_report(args: &[String]) -> Result<(), String> {
                         .map_err(|_| "bad month")?,
                 );
             }
+            "--annual" | "--year-only" => annual = true,
             "-o" | "--output" => {
                 i += 1;
                 out = Some(PathBuf::from(args.get(i).ok_or("needs path")?));
@@ -2441,13 +2505,20 @@ fn cmd_report(args: &[String]) -> Result<(), String> {
         }
         i += 1;
     }
-    let (y, m) = match (year, month) {
-        (Some(y), Some(m)) => (y, m),
-        _ => current_year_month(),
-    };
+    // Annual when --annual, or --year without --month.
+    let want_annual = annual || (year.is_some() && month.is_none());
     let flags = extract_db_from_all(args)?;
     let (ledger, tmp) = open_db(&flags)?;
-    let md = monthly_markdown(&ledger, y, m).map_err(|e| e.to_string())?;
+    let md = if want_annual {
+        let y = year.unwrap_or_else(|| current_year_month().0);
+        annual_markdown(&ledger, y).map_err(|e| e.to_string())?
+    } else {
+        let (y, m) = match (year, month) {
+            (Some(y), Some(m)) => (y, m),
+            _ => current_year_month(),
+        };
+        monthly_markdown(&ledger, y, m).map_err(|e| e.to_string())?
+    };
     if let Some(p) = out {
         if let Some(parent) = p.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -2461,6 +2532,102 @@ fn cmd_report(args: &[String]) -> Result<(), String> {
         let _ = std::fs::remove_file(t);
     }
     Ok(())
+}
+
+fn cmd_aliases(args: &[String]) -> Result<(), String> {
+    if args.is_empty() {
+        return Err(
+            "usage: rradar aliases list|set|rm|apply|path [--from X --to Y] [--rewrite]".into(),
+        );
+    }
+    match args[0].as_str() {
+        "path" => {
+            println!("{}", AliasBook::path().display());
+            Ok(())
+        }
+        "list" => {
+            let book = AliasBook::load();
+            if book.map.is_empty() {
+                println!("(no aliases — rradar aliases set --from '全家便利商店' --to '全家')");
+            } else {
+                for (k, v) in &book.map {
+                    println!("{k}  →  {v}");
+                }
+            }
+            println!("path | {}", AliasBook::path().display());
+            Ok(())
+        }
+        "set" => {
+            let mut from = None;
+            let mut to = None;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--from" => {
+                        i += 1;
+                        from = Some(args.get(i).ok_or("needs value")?.clone());
+                    }
+                    "--to" => {
+                        i += 1;
+                        to = Some(args.get(i).ok_or("needs value")?.clone());
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            let from = from.ok_or("--from required")?;
+            let to = to.ok_or("--to required")?;
+            let mut book = AliasBook::load();
+            book.set(&from, &to);
+            let _ = ensure_data_dir();
+            book.save().map_err(|e| e.to_string())?;
+            println!("alias | {from} → {to}");
+            println!("path  | {}", AliasBook::path().display());
+            Ok(())
+        }
+        "rm" | "remove" => {
+            let mut from = None;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--from" => {
+                        i += 1;
+                        from = Some(args.get(i).ok_or("needs value")?.clone());
+                    }
+                    s if !s.starts_with('-') && from.is_none() => from = Some(s.to_string()),
+                    _ => {}
+                }
+                i += 1;
+            }
+            let from = from.ok_or("usage: rradar aliases rm --from NAME")?;
+            let mut book = AliasBook::load();
+            if book.remove(&from) {
+                book.save().map_err(|e| e.to_string())?;
+                println!("removed | {from}");
+            } else {
+                println!("not found | {from}");
+            }
+            Ok(())
+        }
+        "apply" | "rewrite" => {
+            // Rewrite ledger merchant fields using aliases (exact match).
+            let flags = extract_db_from_all(args)?;
+            let (ledger, tmp) = open_db(&flags)?;
+            let book = AliasBook::load();
+            let mut n = 0usize;
+            for (from, to) in &book.map {
+                n += ledger
+                    .rewrite_merchant(from, to)
+                    .map_err(|e| e.to_string())?;
+            }
+            println!("rewrote | {n} row(s)");
+            maybe_reseal(&flags, &ledger, tmp)?;
+            Ok(())
+        }
+        other => Err(format!(
+            "unknown aliases subcommand `{other}` — try list|set|rm|apply|path"
+        )),
+    }
 }
 
 fn cmd_inbox(args: &[String]) -> Result<(), String> {
@@ -3183,8 +3350,10 @@ fn cmd_backup(args: &[String]) -> Result<(), String> {
                     .map_err(|e| e.to_string())?;
                 let bud =
                     write_restored_budgets(ledger.path(), &restored).map_err(|e| e.to_string())?;
+                let ali =
+                    write_restored_aliases(ledger.path(), &restored).map_err(|e| e.to_string())?;
                 println!(
-                    "restored(merge)\tinserted={ins}\tskipped={skip}\tattachments={att_n}\tbudgets={bud}\t-> {}",
+                    "restored(merge)\tinserted={ins}\tskipped={skip}\tattachments={att_n}\tbudgets={bud}\taliases={ali}\t-> {}",
                     db.display()
                 );
                 if let Some(t) = tmp {
@@ -3199,10 +3368,11 @@ fn cmd_backup(args: &[String]) -> Result<(), String> {
                 let att_n =
                     write_restored_attachments(&db, &restored).map_err(|e| e.to_string())?;
                 let bud = write_restored_budgets(&db, &restored).map_err(|e| e.to_string())?;
+                let ali = write_restored_aliases(&db, &restored).map_err(|e| e.to_string())?;
                 // Open once so migrations apply if restoring older schema snapshot.
                 let ledger = rradar_core::Ledger::open(&db).map_err(|e| e.to_string())?;
                 println!(
-                    "restored\t{} txs\tattachments={att_n}\tbudgets={bud}\tschema={}\t-> {}",
+                    "restored\t{} txs\tattachments={att_n}\tbudgets={bud}\taliases={ali}\tschema={}\t-> {}",
                     restored.manifest.transaction_count,
                     ledger.schema_version().unwrap_or_default(),
                     db.display()
@@ -3517,7 +3687,8 @@ Commands:
   delete <id> --yes    Delete transaction (alias: rm)
   stats                Per-currency totals; --by-category for breakdown
   top                  Top merchants by spend (one currency)
-  report               Markdown monthly report (-o file.md)
+  report               Markdown monthly or annual report (-o file.md)
+  aliases              Merchant display aliases (local; in backup)
   inbox [--ensure]     Show default drop folder (RRADAR_INBOX)
   watch [dir]          Auto-process new files (default: inbox; --attach)
   serve [--bind 127.0.0.1:7432]  Local-only HTTP API

@@ -42,6 +42,7 @@ Optional entries (schema v3 attachment store + local budgets):
 |------|---------|
 | `attachments/{tx_id}/{filename}` | Raw receipt file bytes (copied from `{db_parent}/attachments/`) |
 | `budgets.toml` | Soft monthly limits (major units); also written to data dir on restore |
+| `merchant_aliases.toml` | Exact merchant display renames |
 
 On `backup restore` / `restore --merge`, attachment entries are written next to the target ledger so relative `attachment_path` values keep working. Optional `budgets.toml` is written beside the ledger **and** into the default data dir (`rradar budget status`). Handoff packages use the same optional layout. Manifest may set `has_budgets`.
 

@@ -14,6 +14,7 @@
 - Local HTTP API expanded for product demo automation (capabilities, paths, attach, process flags)
 
 ### Added
+- **Year analytics + merchant aliases (axis #2):** `stats --year`, `report --year` annual markdown; `rradar aliases`; backup packs `merchant_aliases.toml`; FFI `report_year_markdown` / `aliases_json`
 - **Mobile FFI parity (axis #3):** Dart query/tags/budget/engines API; Budget screen + ledger tag filter; `docs/frb-contract.md` FRB generate checklist
 - **Supply-chain / release trust (axis #4):** `tools/supply-chain/check_deps.py` (forbidden license gate + inventory); `rradar licenses`; CI supply-chain step; `docs/SUPPLY-CHAIN.md`; release-check verifies LICENSE + THIRD_PARTY_NOTICES
 - **Demo showcase + product search closed-loop (axis #5):** `docs/demo-showcase.md`; local API `/tags` `/budget` + rich `/transactions` filters; filtered `export`; doctor budgets line; api-smoke hits tag filter

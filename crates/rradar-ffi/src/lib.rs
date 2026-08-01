@@ -83,6 +83,8 @@ pub fn capabilities_json() -> String {
         engine_auto: bool,
         tag_filter: bool,
         local_budgets: bool,
+        annual_report: bool,
+        merchant_aliases: bool,
         notes: &'static str,
     }
     serde_json::to_string(&Caps {
@@ -102,6 +104,8 @@ pub fn capabilities_json() -> String {
         engine_auto: true,
         tag_filter: true,
         local_budgets: true,
+        annual_report: true,
+        merchant_aliases: true,
         notes: "local-first; multi-device via backup/handoff file only",
     })
     .unwrap_or_else(|_| "{}".into())
@@ -790,6 +794,23 @@ pub fn report_month_markdown(
     with_ledger(&db_path, passphrase.as_deref(), |ledger| {
         rradar_core::monthly_markdown(ledger, year, month).map_err(|e| e.to_string())
     })
+}
+
+/// Full-year markdown report (per-currency totals + monthly breakdown).
+pub fn report_year_markdown(
+    db_path: String,
+    passphrase: Option<String>,
+    year: i32,
+) -> Result<String, String> {
+    with_ledger(&db_path, passphrase.as_deref(), |ledger| {
+        rradar_core::annual_markdown(ledger, year).map_err(|e| e.to_string())
+    })
+}
+
+/// Merchant aliases book as JSON object map.
+pub fn aliases_json() -> String {
+    let book = rradar_core::AliasBook::load();
+    serde_json::to_string(&book.map).unwrap_or_else(|_| "{}".into())
 }
 
 /// Top merchants for one currency: JSON array of `{merchant, total_minor, count}`.

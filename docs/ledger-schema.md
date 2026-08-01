@@ -62,6 +62,20 @@ Soft monthly limits live in **`{data_dir}/budgets.toml`** (major units), optiona
 
 **Multi-device:** `backup create` / handoff packages include `budgets.toml` when present; restore rehydrates the file (no cloud).
 
+### Merchant aliases (not in SQLite)
+
+Exact-match display renames live in **`{data_dir}/merchant_aliases.toml`**.  
+CLI: `rradar aliases list|set|rm|apply`. Reports apply aliases for display; `aliases apply` rewrites ledger rows.  
+Packed into backup as `merchant_aliases.toml` when present.
+
+### Year analytics (no schema bump)
+
+| API / CLI | Meaning |
+|-----------|---------|
+| `stats --year YYYY` | Year total + monthly rows per currency |
+| `report --year YYYY` | Annual markdown (omit `--month` or pass `--annual`) |
+| `report --year Y --month M` | Monthly markdown (default) |
+
 ## Attachment store (local)
 
 Receipt images/files are **not** embedded in SQLite. They live next to the ledger:
