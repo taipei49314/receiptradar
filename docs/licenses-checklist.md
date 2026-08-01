@@ -19,10 +19,12 @@ cargo tree -i openssl  # should be empty for core path
 python tools/supply-chain/check_deps.py
 python tools/supply-chain/check_deps.py --write-inventory
 rradar licenses
-# optional: cargo install cargo-deny && cargo deny check
+cargo install cargo-deny --locked --version 0.20.2
+cargo deny check
+# or: powershell -File scripts/check-supply-chain.ps1 -InstallDeny
 ```
 
-Automated CI gate: `tools/supply-chain/check_deps.py` (forbids AGPL/SSPL/BUSL/Commons Clause).  
+Automated CI gates: `tools/supply-chain/check_deps.py` + `cargo deny check` (`deny.toml`; pin cargo-deny **0.20.2**).  
 Policy doc: [SUPPLY-CHAIN.md](./SUPPLY-CHAIN.md).
 
 ## Project source
