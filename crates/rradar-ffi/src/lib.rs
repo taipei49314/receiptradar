@@ -784,6 +784,29 @@ pub fn stats_by_category_json(
     })
 }
 
+/// Import transactions from CSV text (same format as CLI `export csv`).
+/// Returns JSON `{inserted, skipped, total_rows}`.
+pub fn import_csv_json(
+    db_path: String,
+    passphrase: Option<String>,
+    csv_text: String,
+) -> Result<String, String> {
+    let rows = rradar_core::transactions_from_csv(&csv_text).map_err(|e| e.to_string())?;
+    let total = rows.len();
+    with_ledger(&db_path, passphrase.as_deref(), |ledger| {
+        let (ins, skip) = ledger
+            .import_transactions(&rows)
+            .map_err(|e| e.to_string())?;
+        Ok(serde_json::json!({
+            "inserted": ins,
+            "skipped": skip,
+            "total_rows": total,
+            "local_only": true,
+        })
+        .to_string())
+    })
+}
+
 /// Markdown monthly report for year/month.
 pub fn report_month_markdown(
     db_path: String,

@@ -79,8 +79,10 @@ rradar delete <id> --yes
 rradar recategorize       # only category=other
 rradar config set default_currency TWD
 
-# 5) Export / backup (local-only multi-device via file copy)
+# 5) Export / import / backup (local-only multi-device via file copy)
 rradar export csv -o month.csv
+rradar import csv month.csv          # skip existing ids; Excel-friendly roundtrip
+rradar import json month.json
 rradar backup create -p 'your-passphrase' -o backup.rradar
 rradar backup info --in backup.rradar -p 'your-passphrase'
 rradar backup verify --in backup.rradar -p 'your-passphrase'

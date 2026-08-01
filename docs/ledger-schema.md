@@ -76,6 +76,15 @@ Packed into backup as `merchant_aliases.toml` when present.
 | `report --year YYYY` | Annual markdown (omit `--month` or pass `--annual`) |
 | `report --year Y --month M` | Monthly markdown (default) |
 
+### CSV import / export (local multi-device)
+
+| Direction | Command |
+|-----------|---------|
+| Export | `rradar export csv -o out.csv` (UTF-8 BOM for Excel) |
+| Import | `rradar import csv out.csv` — skips existing ids; empty `id` → new ULID |
+
+Compatible with the same header as export. No cloud; user copies the file.
+
 ## Attachment store (local)
 
 Receipt images/files are **not** embedded in SQLite. They live next to the ledger:

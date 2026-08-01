@@ -72,6 +72,7 @@ cargo build -p rradar-ffi --release
 ### Backup / handoff (no cloud)
 | Function | Purpose |
 |----------|---------|
+| `import_csv_json` | Import export-format CSV → ledger (skip existing ids) |
 | `backup_create_file` | Encrypted backup.rradar (**attachments + budgets.toml** when present) |
 | `handoff_create_file` | Multi-device handoff package (+ attachments + budgets) |
 | `handoff_info_json` | Inspect handoff |

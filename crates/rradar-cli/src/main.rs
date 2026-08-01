@@ -9,11 +9,11 @@ use rradar_core::{
     inspect_backup, inspect_handoff, install_rule_pack, list_rule_files, monthly_markdown,
     monthly_markdown_with_budgets, normalize_tags, open_ledger_auto, process_path,
     remove_stored_attachment, resolve_attachment_path, restore_backup, rules_dir, save_sealed,
-    store_attachment, transactions_from_backup, transactions_to_csv, transactions_to_json,
-    verify_backup, write_handoff_file, write_restored_aliases, write_restored_attachments,
-    write_restored_budgets, write_restored_db, AliasBook, AppConfig, BudgetBook, Iso4217, Money,
-    ProcessOptions, ReceiptDraft, Transaction, TxFilter, TxUpdate, UserEdits,
-    LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
+    store_attachment, transactions_from_backup, transactions_from_csv, transactions_to_csv,
+    transactions_to_json, verify_backup, write_handoff_file, write_restored_aliases,
+    write_restored_attachments, write_restored_budgets, write_restored_db, AliasBook, AppConfig,
+    BudgetBook, Iso4217, Money, ProcessOptions, ReceiptDraft, Transaction, TxFilter, TxUpdate,
+    UserEdits, LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
 };
 use rradar_ocr::engine_by_name;
 use std::env;
@@ -1677,10 +1677,11 @@ fn cmd_manual(args: &[String]) -> Result<(), String> {
 
 fn cmd_import(args: &[String]) -> Result<(), String> {
     // rradar import json path.json
+    // rradar import csv path.csv
     // rradar import backup --in file.rradar -p PASS [--db PATH]
     if args.is_empty() {
         return Err(
-            "usage: rradar import json <file.json> | rradar import backup --in file.rradar -p PASS"
+            "usage: rradar import json|csv <file> | rradar import backup --in file.rradar -p PASS"
                 .into(),
         );
     }
@@ -1695,7 +1696,24 @@ fn cmd_import(args: &[String]) -> Result<(), String> {
             let (ins, skip) = ledger
                 .import_transactions(&rows)
                 .map_err(|e| e.to_string())?;
-            println!("import | inserted={ins} skipped={skip}");
+            println!("import json | inserted={ins} skipped={skip} (existing ids skipped)");
+            maybe_reseal(&flags, &ledger, tmp)?;
+            Ok(())
+        }
+        "csv" => {
+            let path = args.get(1).ok_or("usage: rradar import csv <file.csv>")?;
+            let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+            let rows = transactions_from_csv(&raw).map_err(|e| e.to_string())?;
+            let flags = extract_db_from_all(args)?;
+            let _ = ensure_data_dir();
+            let (ledger, tmp) = open_db(&flags)?;
+            let (ins, skip) = ledger
+                .import_transactions(&rows)
+                .map_err(|e| e.to_string())?;
+            println!(
+                "import csv | inserted={ins} skipped={skip} from={} rows (existing ids skipped; local-only)",
+                rows.len()
+            );
             maybe_reseal(&flags, &ledger, tmp)?;
             Ok(())
         }
@@ -1743,7 +1761,7 @@ fn cmd_import(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         other => Err(format!(
-            "unknown import type `{other}` — try: import json | import backup"
+            "unknown import type `{other}` — try: import json | import csv | import backup"
         )),
     }
 }
@@ -3805,6 +3823,8 @@ export csv|json [-o file] [--db PATH]
   CSV includes UTF-8 BOM for Excel.",
         "import" => "\
 import json <file.json> [--db PATH]
+import csv <file.csv> [--db PATH]
+  CSV matches `export csv` header (UTF-8 BOM OK). Empty id → new ULID; existing ids skipped.
 import backup --in file.rradar -p PASS [--db PATH]
   JSON array or merge transactions from encrypted backup (skip existing ids).",
         "migrate" => "\
@@ -3906,7 +3926,7 @@ Commands:
   path                 Print default home & db paths
   process <files…>     Parse receipt(s) (alias: add); batch OK
   manual               Manual entry without OCR (alias: entry)
-  import json <file>   Import transactions JSON array
+  import json|csv      Import JSON array or CSV (export format)
   list                 List/search transactions (alias: ls, search)
   tags                 Distinct free-form tags in ledger
   budget               Local monthly soft limits (set|status|list)
@@ -3933,7 +3953,7 @@ Commands:
   handoff              Multi-device encrypted package (create|info|apply)
   export csv|json      Export ledger
   backup create|restore|info|verify
-  import json|backup   Import JSON array or merge from .rradar
+  import json|csv|backup  Import JSON/CSV or merge from .rradar
   migrate              Apply/report ledger schema migrations
   models               ONNX pack status / SHA-256 pin verify
   engines              OCR engines readiness (mock|onnx|auto)

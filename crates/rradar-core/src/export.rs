@@ -135,14 +135,14 @@ pub fn unpack_archive(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, ExportErro
     Ok(files)
 }
 
+/// Canonical CSV header (order matters for import).
+pub const CSV_HEADER: &str = "id,confirmed_at,transacted_at,merchant,amount_minor,currency,exponent,category,invoice_id,source_path,confidence,notes,tags,attachment_path";
+
 pub fn transactions_to_csv(rows: &[Transaction]) -> Result<String, ExportError> {
     let mut w = Vec::new();
     // UTF-8 BOM helps Excel on Windows open CJK correctly
     w.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
-    writeln!(
-        w,
-        "id,confirmed_at,transacted_at,merchant,amount_minor,currency,exponent,category,invoice_id,source_path,confidence,notes,tags,attachment_path"
-    )?;
+    writeln!(w, "{CSV_HEADER}")?;
     for t in rows {
         let inv = t.invoice_id.as_deref().unwrap_or("");
         let notes = t.notes.as_deref().unwrap_or("").replace('"', "\"\"");
@@ -173,6 +173,220 @@ pub fn transactions_to_csv(rows: &[Transaction]) -> Result<String, ExportError> 
         )?;
     }
     Ok(String::from_utf8(w)?)
+}
+
+/// Parse CSV produced by [`transactions_to_csv`] (or compatible Excel export).
+///
+/// - Strips UTF-8 BOM  
+/// - Supports quoted fields with `""` escapes  
+/// - Empty `id` → new ULID  
+/// - Missing optional columns tolerated when header present  
+/// - Skips blank lines  
+pub fn transactions_from_csv(csv: &str) -> Result<Vec<Transaction>, ExportError> {
+    let s = csv.strip_prefix('\u{feff}').unwrap_or(csv);
+    let mut lines = s.lines().filter(|l| !l.trim().is_empty());
+    let header_line = lines
+        .next()
+        .ok_or_else(|| ExportError::Format("csv empty".into()))?;
+    let headers = parse_csv_line(header_line);
+    if headers.is_empty() {
+        return Err(ExportError::Format("csv missing header".into()));
+    }
+    let idx = |name: &str| headers.iter().position(|h| h.eq_ignore_ascii_case(name));
+
+    let i_id = idx("id");
+    let i_confirmed = idx("confirmed_at");
+    let i_transacted = idx("transacted_at")
+        .ok_or_else(|| ExportError::Format("csv missing transacted_at column".into()))?;
+    let i_merchant =
+        idx("merchant").ok_or_else(|| ExportError::Format("csv missing merchant column".into()))?;
+    let i_amount = idx("amount_minor")
+        .ok_or_else(|| ExportError::Format("csv missing amount_minor column".into()))?;
+    let i_currency =
+        idx("currency").ok_or_else(|| ExportError::Format("csv missing currency column".into()))?;
+    let i_exponent = idx("exponent");
+    let i_category = idx("category");
+    let i_invoice = idx("invoice_id");
+    let i_source = idx("source_path");
+    let i_conf = idx("confidence").or_else(|| idx("overall_confidence"));
+    let i_notes = idx("notes");
+    let i_tags = idx("tags");
+    let i_att = idx("attachment_path");
+
+    let mut out = Vec::new();
+    for (lineno, line) in lines.enumerate() {
+        let cols = parse_csv_line(line);
+        if cols.iter().all(|c| c.trim().is_empty()) {
+            continue;
+        }
+        let get = |i: Option<usize>| -> String {
+            i.and_then(|ix| cols.get(ix).cloned())
+                .unwrap_or_default()
+                .trim()
+                .to_string()
+        };
+        let id = {
+            let raw = get(i_id);
+            if raw.is_empty() {
+                ulid::Ulid::new().to_string()
+            } else {
+                raw
+            }
+        };
+        let currency = get(Some(i_currency)).to_uppercase();
+        if currency.is_empty() {
+            return Err(ExportError::Format(format!(
+                "csv line {}: empty currency",
+                lineno + 2
+            )));
+        }
+        let amount_minor: i64 = get(Some(i_amount)).parse().map_err(|_| {
+            ExportError::Format(format!("csv line {}: bad amount_minor", lineno + 2))
+        })?;
+        let exponent: u8 = if let Some(ix) = i_exponent {
+            let e = get(Some(ix));
+            if e.is_empty() {
+                crate::money::Iso4217::parse(&currency)
+                    .map(|c| c.exponent())
+                    .unwrap_or(2)
+            } else {
+                e.parse().map_err(|_| {
+                    ExportError::Format(format!("csv line {}: bad exponent", lineno + 2))
+                })?
+            }
+        } else {
+            crate::money::Iso4217::parse(&currency)
+                .map(|c| c.exponent())
+                .unwrap_or(2)
+        };
+        let confirmed_at = {
+            let c = get(i_confirmed);
+            if c.is_empty() {
+                crate::pipeline::utc_now_iso()
+            } else {
+                c
+            }
+        };
+        let transacted_at = get(Some(i_transacted));
+        if transacted_at.is_empty() {
+            return Err(ExportError::Format(format!(
+                "csv line {}: empty transacted_at",
+                lineno + 2
+            )));
+        }
+        let merchant = get(Some(i_merchant));
+        if merchant.is_empty() {
+            return Err(ExportError::Format(format!(
+                "csv line {}: empty merchant",
+                lineno + 2
+            )));
+        }
+        let category = {
+            let c = get(i_category);
+            if c.is_empty() {
+                "other".into()
+            } else {
+                c
+            }
+        };
+        let invoice_id = {
+            let v = get(i_invoice);
+            if v.is_empty() {
+                None
+            } else {
+                Some(v)
+            }
+        };
+        let source_path = {
+            let v = get(i_source);
+            if v.is_empty() {
+                "import:csv".into()
+            } else {
+                v
+            }
+        };
+        let overall_confidence: f32 = {
+            let v = get(i_conf);
+            if v.is_empty() {
+                1.0
+            } else {
+                v.parse().unwrap_or(1.0)
+            }
+        };
+        let notes = {
+            let v = get(i_notes);
+            if v.is_empty() {
+                None
+            } else {
+                Some(v)
+            }
+        };
+        let tags = {
+            let v = get(i_tags);
+            if v.is_empty() {
+                None
+            } else {
+                Some(v)
+            }
+        };
+        let attachment_path = {
+            let v = get(i_att);
+            if v.is_empty() {
+                None
+            } else {
+                Some(v)
+            }
+        };
+        out.push(Transaction {
+            id,
+            confirmed_at,
+            transacted_at,
+            merchant,
+            amount_minor,
+            currency,
+            exponent,
+            category,
+            invoice_id,
+            source_path,
+            overall_confidence,
+            content_hash: None,
+            notes,
+            tags,
+            attachment_path,
+        });
+    }
+    Ok(out)
+}
+
+/// Split one CSV line into fields (RFC4180-ish quotes).
+fn parse_csv_line(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_quotes = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                if in_quotes {
+                    if chars.peek() == Some(&'"') {
+                        cur.push('"');
+                        chars.next();
+                    } else {
+                        in_quotes = false;
+                    }
+                } else {
+                    in_quotes = true;
+                }
+            }
+            ',' if !in_quotes => {
+                out.push(cur);
+                cur = String::new();
+            }
+            _ => cur.push(c),
+        }
+    }
+    out.push(cur);
+    out
 }
 
 pub fn transactions_to_json(rows: &[Transaction]) -> Result<String, ExportError> {
@@ -464,6 +678,12 @@ mod tests {
         assert!(csv.contains("tags"));
         assert!(csv.contains("attachment_path"));
 
+        let parsed = transactions_from_csv(&csv).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].amount_minor, 500);
+        assert_eq!(parsed[0].currency, "USD");
+        assert_eq!(parsed[0].merchant, "Test");
+
         let sealed = create_backup(&db, "secret", 8).unwrap();
         let restored = restore_backup("secret", &sealed).unwrap();
         assert_eq!(restored.manifest.transaction_count, 1);
@@ -477,6 +697,34 @@ mod tests {
         assert_eq!(m.transaction_count, 1);
         let txs = transactions_from_backup(&restore_backup("secret", &sealed).unwrap()).unwrap();
         assert_eq!(txs.len(), 1);
+    }
+
+    #[test]
+    fn csv_import_skips_existing_and_fills_empty_id() {
+        let db = Ledger::open_in_memory().unwrap();
+        db.confirm_draft(&draft(), Some("h"), Some("note"), false)
+            .unwrap();
+        let rows = db.export_all().unwrap();
+        let csv = transactions_to_csv(&rows).unwrap();
+        // Re-import same CSV → all skipped
+        let again = transactions_from_csv(&csv).unwrap();
+        let (ins, skip) = db.import_transactions(&again).unwrap();
+        assert_eq!(ins, 0);
+        assert_eq!(skip, 1);
+
+        // CSV with empty id generates new id and inserts
+        let manual = "\u{feff}id,confirmed_at,transacted_at,merchant,amount_minor,currency,exponent,category,invoice_id,source_path,confidence,notes,tags,attachment_path\n\
+            ,,2024-02-02,\"Shop \"\"A\"\"\",1200,TWD,2,other,,import:csv,1.0,\"n\",\"tag1\",\n";
+        let parsed = transactions_from_csv(manual).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert!(!parsed[0].id.is_empty());
+        assert_eq!(parsed[0].merchant, "Shop \"A\"");
+        assert_eq!(parsed[0].amount_minor, 1200);
+        assert_eq!(parsed[0].tags.as_deref(), Some("tag1"));
+        let (ins2, skip2) = db.import_transactions(&parsed).unwrap();
+        assert_eq!(ins2, 1);
+        assert_eq!(skip2, 0);
+        assert_eq!(db.count().unwrap(), 2);
     }
 
     #[test]

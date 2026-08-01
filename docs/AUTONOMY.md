@@ -525,10 +525,32 @@ Tag: v0.1.0-cli.11
 | P2 | Device A04 when Android available |
 | P3 | Advisory ignore list hygiene if rustsec noise rises |
 
+## Cycle 33 — CSV import roundtrip (main axis #2)
+
+### Plan
+1. `transactions_from_csv` (BOM, quoted fields, empty id → ULID)
+2. CLI `import csv`; skip existing ids; FFI `import_csv_json`
+3. Unit tests: export→import roundtrip + quoted merchant
+4. Docs ledger-schema / cli / ffi
+
+### Verify
+- `cargo test --workspace --locked` (csv import tests) / clippy green
+
+### Result
+- Excel/CSV multi-device path is local file only (symmetric with export)
+
+### Next seeds
+| Priority | Item |
+|----------|------|
+| P1 | FRB when Flutter present |
+| P2 | ONNX desktop re-measure when weights present |
+| P3 | Device A04 when Android available |
+
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
 - Green tests before re-plan  
 - Non-goals: official sync, GPT wrapper  
+
 
 
 

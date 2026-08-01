@@ -63,7 +63,7 @@ rradar help
 | Monthly totals (per currency) | `stats` |
 | Export (optional filters) | `export csv\|json` (`--tag` `--category` …) |
 | Encrypted backup | `backup create\|restore\|info\|verify` (+ `--merge`) |
-| Import merge | `import json` / `import backup` |
+| Import merge | `import json` / `import csv` / `import backup` |
 | Schema migrate | `migrate` (local SQLite; no cloud) |
 | At-rest seal | `seal` / `unseal` |
 | TW e-invoice QR | `--qr` / `--qr-file` |
