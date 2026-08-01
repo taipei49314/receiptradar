@@ -70,6 +70,10 @@ smoke-onnx:
 cli-onnx *args:
     cargo run -q -p rradar-cli --features onnx -- {{args}}
 
+# Dual supply-chain gate (python + cargo-deny when installed)
+supply-chain:
+    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-supply-chain.ps1
+
 # Full local gate (matches CI spirit)
 ci-local:
     cargo fmt --all -- --check
@@ -77,6 +81,8 @@ ci-local:
     cargo test --workspace --locked
     cargo build --release -p rradar-cli --locked
     ./target/release/rradar version --long
+    ./target/release/rradar fixtures verify --fixtures fixtures
+    python tools/supply-chain/check_deps.py --quiet
 
 release-smoke:
     cargo build --release -p rradar-cli --locked

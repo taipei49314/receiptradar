@@ -502,10 +502,34 @@ Tag: v0.1.0-cli.11
 | P2 | cargo-deny dual gate optional |
 | P3 | Device A04 when Android available |
 
+## Cycle 32 — cargo-deny dual gate + CI fixtures (main axis #4)
+
+### Plan
+1. Root `deny.toml` (licenses allowlist, crates.io sources, cargo-deny 0.20+)
+2. `scripts/check-supply-chain.ps1`/`.sh` dual gate (python always; deny optional/local)
+3. CI: install cargo-deny 0.20.2 + `cargo deny check`; `fixtures verify`
+4. SUPPLY-CHAIN / RELEASE docs
+
+### Verify
+- `python tools/supply-chain/check_deps.py` → SUPPLY_CHAIN_OK  
+- `cargo deny check` → advisories/bans/licenses/sources ok  
+- `cargo test --workspace --locked` / clippy green  
+
+### Result
+- Release trust has two independent license/source gates; fixture matrix gated in CI  
+
+### Next seeds
+| Priority | Item |
+|----------|------|
+| P1 | FRB when Flutter present |
+| P2 | Device A04 when Android available |
+| P3 | Advisory ignore list hygiene if rustsec noise rises |
+
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
 - Green tests before re-plan  
 - Non-goals: official sync, GPT wrapper  
+
 
 
 

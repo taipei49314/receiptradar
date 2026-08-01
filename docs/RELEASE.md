@@ -12,6 +12,11 @@ cargo build --release -p rradar-cli --locked
 ./target/release/rradar release-check --fixtures fixtures
 ./target/release/rradar demo --fixtures fixtures --db /tmp/rradar-rel-demo.db --quiet
 python tools/network-audit/check_offline_deps.py
+python tools/supply-chain/check_deps.py
+cargo deny check   # dual gate; cargo install cargo-deny --version 0.20.2
+./target/release/rradar fixtures verify --fixtures fixtures
+# dual wrapper:
+# ./scripts/check-supply-chain.sh --install-deny
 # optional post-install style:
 # ./scripts/verify-install.sh ./target/release/rradar
 ```
@@ -22,6 +27,8 @@ Windows:
 powershell -File scripts/smoke-cli.ps1
 powershell -File scripts/demo.ps1
 cargo run -p rradar-cli -- release-check --fixtures fixtures
+cargo run -p rradar-cli -- fixtures verify --fixtures fixtures
+powershell -File scripts/check-supply-chain.ps1 -InstallDeny
 powershell -File scripts/verify-install.ps1 -Bin target\release\rradar.exe
 ```
 
@@ -29,6 +36,7 @@ Also:
 
 - [ ] `docs/licenses-checklist.md` reviewed for binary deps  
 - [ ] `THIRD_PARTY_NOTICES` still accurate for default mock CLI  
+- [ ] `deny.toml` / `cargo deny check` green  
 - [ ] CHANGELOG updated  
 - [ ] `docs/INSTALL.md` still accurate for artifact names  
 
@@ -60,8 +68,10 @@ git push origin v0.1.0-cli.N
 | cli smoke + engines | Product path |
 | demo + api-smoke | Closed loops |
 | **release-check** | Pre-flight gate (process/demo/api) |
+| **fixtures verify** | Offline extract matrix totals |
 | **release binary smoke** | `cargo build --release` + release-check + demo |
 | network audit | No surprise egress in source |
+| supply-chain python + **cargo-deny** | Dual license/source gate |
 
 ## Install from release
 

@@ -71,8 +71,19 @@ jobs:
       - name: network audit
         run: python tools/network-audit/check_offline_deps.py
 
-      - name: supply-chain license gate
+      - name: supply-chain license gate (python)
         run: python tools/supply-chain/check_deps.py --quiet
+
+      - name: supply-chain cargo-deny dual gate
+        # cargo-deny >= 0.20 required for advisory DB CVSS 4.0 parse
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo install cargo-deny --locked --version 0.20.2
+          cargo deny check
+
+      - name: fixtures matrix verify
+        run: cargo run -p rradar-cli --locked -- fixtures verify --fixtures fixtures
 
       - name: licenses CLI surface
         run: cargo run -p rradar-cli --locked -- licenses --json
