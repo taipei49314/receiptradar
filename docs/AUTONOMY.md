@@ -413,6 +413,29 @@ Tag: v0.1.0-cli.11
 | P2 | FRB when Flutter present |
 | P3 | Device A04 matrix when Android available |
 
+## Cycle 28 — supply-chain / release trust (main axis #4)
+
+### Plan
+1. `tools/supply-chain/check_deps.py` — LICENSE/notices + Cargo.lock license scan (forbid AGPL/SSPL/BUSL)
+2. Optional `--write-inventory` → `docs/dependency-inventory.md`
+3. `rradar licenses` / release-check notices steps; CI supply-chain job step
+4. `docs/SUPPLY-CHAIN.md` + licenses-checklist pointer
+
+### Verify
+- `python tools/supply-chain/check_deps.py` → `SUPPLY_CHAIN_OK`
+- `cargo test --workspace --locked` / clippy green
+- `rradar release-check` includes license_file + third_party_notices
+
+### Result
+- Install/release trust surface has automated license gate without cargo-deny install
+
+### Next seeds
+| Priority | Item |
+|----------|------|
+| P1 | FRB when Flutter present |
+| P2 | Device A04 matrix when Android available |
+| P3 | Optional cargo-deny.toml dual gate |
+
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
 - Green tests before re-plan  

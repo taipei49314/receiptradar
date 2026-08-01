@@ -39,6 +39,7 @@ fn main() -> ExitCode {
         "config" => cmd_config(&args[1..]),
         "doctor" => cmd_doctor(&args[1..]),
         "engines" => cmd_engines(&args[1..]),
+        "licenses" | "notices" => cmd_licenses(&args[1..]),
         "release-check" | "self-check" => cmd_release_check(&args[1..]),
         "demo" => cmd_demo(&args[1..]),
         "process" | "add" => cmd_process(&args[1..]),
@@ -248,6 +249,29 @@ fn cmd_release_check(args: &[String]) -> Result<(), String> {
         "policy",
         eng_json.contains("no cloud") || eng_json.contains("local-first"),
         "local-first OCR catalog",
+    );
+
+    // 3b) Supply-chain notices (files in package / source tree)
+    let notices = find_repo_file("THIRD_PARTY_NOTICES");
+    let license = find_repo_file("LICENSE");
+    step(
+        "license_file",
+        license.as_ref().map(|p| p.is_file()).unwrap_or(false),
+        &license
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "LICENSE not found".into()),
+    );
+    step(
+        "third_party_notices",
+        notices
+            .as_ref()
+            .map(|p| p.is_file() && p.metadata().map(|m| m.len() > 32).unwrap_or(false))
+            .unwrap_or(false),
+        &notices
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "THIRD_PARTY_NOTICES not found".into()),
     );
 
     let fixtures = fixtures_root
@@ -986,6 +1010,72 @@ fn find_fixtures_dir() -> PathBuf {
         }
     }
     PathBuf::from("fixtures")
+}
+
+/// Locate a repo-root file when cwd is repo root or a crate dir.
+fn find_repo_file(name: &str) -> Option<PathBuf> {
+    [
+        PathBuf::from(name),
+        PathBuf::from("..").join(name),
+        PathBuf::from("../..").join(name),
+        PathBuf::from("../../..").join(name),
+    ]
+    .into_iter()
+    .find(|c| c.is_file())
+}
+
+/// Print third-party notices + project license policy (release trust surface).
+fn cmd_licenses(args: &[String]) -> Result<(), String> {
+    let json = args.iter().any(|a| a == "--json");
+    let notices_path = find_repo_file("THIRD_PARTY_NOTICES");
+    let license_path = find_repo_file("LICENSE");
+    if json {
+        let notices = notices_path
+            .as_ref()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .unwrap_or_default();
+        let body = serde_json::json!({
+            "product_id": PRODUCT_ID,
+            "version": VERSION,
+            "project_license": "Apache-2.0",
+            "license_path": license_path.as_ref().map(|p| p.display().to_string()),
+            "notices_path": notices_path.as_ref().map(|p| p.display().to_string()),
+            "notices_bytes": notices.len(),
+            "cloud_sync": false,
+            "official_relay": false,
+            "supply_chain_docs": ["docs/SUPPLY-CHAIN.md", "docs/licenses-checklist.md", "THIRD_PARTY_NOTICES"],
+            "gate": "python tools/supply-chain/check_deps.py",
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&body).unwrap_or_default()
+        );
+        return Ok(());
+    }
+    println!("ReceiptRadar licenses / notices (local-first)");
+    println!("  product  | {PRODUCT_ID} {VERSION}");
+    println!("  license  | Apache-2.0");
+    if let Some(p) = &license_path {
+        println!("  LICENSE  | {}", p.display());
+    } else {
+        println!("  LICENSE  | (not found — run from repo / release package root)");
+    }
+    if let Some(p) = &notices_path {
+        println!("  notices  | {}", p.display());
+        println!("────────────────────────────────────────");
+        let text = std::fs::read_to_string(p).map_err(|e| e.to_string())?;
+        print!("{text}");
+        if !text.ends_with('\n') {
+            println!();
+        }
+    } else {
+        println!("  notices  | THIRD_PARTY_NOTICES missing");
+        println!("  hint     | ship notices with release archives (see docs/SUPPLY-CHAIN.md)");
+    }
+    println!("────────────────────────────────────────");
+    println!("  gate     | python tools/supply-chain/check_deps.py");
+    println!("  docs     | docs/SUPPLY-CHAIN.md");
+    Ok(())
 }
 
 fn collect_glob(dir: &Path, exts: &[&str]) -> Vec<PathBuf> {
@@ -3323,10 +3413,15 @@ models [status|verify|pins] [--dir models]
 engines [--json]
   Show OCR engine availability: mock, onnx readiness, auto resolution.
   process --engine auto uses onnx when feature+models ready, else mock.",
+        "licenses" | "notices" => "\
+licenses [--json]
+  Print project Apache-2.0 policy and THIRD_PARTY_NOTICES (alias: notices).
+  Supply-chain gate: python tools/supply-chain/check_deps.py
+  Docs: docs/SUPPLY-CHAIN.md",
         "release-check" | "self-check" => "\
 release-check [--fixtures DIR] [--skip-demo] [--skip-api] [--quiet]
   Local pre-flight for release/install (no network):
-  version, schema, engines, process fixture, demo, api-smoke.
+  version, schema, engines, LICENSE/notices, process fixture, demo, api-smoke.
   Alias: self-check. Exit non-zero on any FAIL.",
         "backup" => "\
 backup create -p PASS [-o file] [--db PATH]
@@ -3397,6 +3492,7 @@ Commands:
   config               Show/set local config.toml
   doctor               Environment / db check
   engines              OCR engines readiness (mock|onnx|auto)
+  licenses             THIRD_PARTY_NOTICES + Apache-2.0 policy (alias: notices)
   release-check        Pre-flight install/release gate (alias: self-check)
   demo                 One-command closed-loop demo (fixtures → ledger)
   path                 Print default home & db paths

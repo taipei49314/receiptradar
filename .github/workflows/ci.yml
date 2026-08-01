@@ -70,3 +70,9 @@ jobs:
 
       - name: network audit
         run: python tools/network-audit/check_offline_deps.py
+
+      - name: supply-chain license gate
+        run: python tools/supply-chain/check_deps.py --quiet
+
+      - name: licenses CLI surface
+        run: cargo run -p rradar-cli --locked -- licenses --json

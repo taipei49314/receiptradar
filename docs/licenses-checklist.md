@@ -16,8 +16,14 @@ Complete before first public binary / `v0.1.0` release tag.
 
 ```bash
 cargo tree -i openssl  # should be empty for core path
+python tools/supply-chain/check_deps.py
+python tools/supply-chain/check_deps.py --write-inventory
+rradar licenses
 # optional: cargo install cargo-deny && cargo deny check
 ```
+
+Automated CI gate: `tools/supply-chain/check_deps.py` (forbids AGPL/SSPL/BUSL/Commons Clause).  
+Policy doc: [SUPPLY-CHAIN.md](./SUPPLY-CHAIN.md).
 
 ## Project source
 

@@ -98,6 +98,16 @@ Flutter shell: [apps/mobile](./apps/mobile) (mock `RradarApi` until FRB generate
 cargo test -p rradar-ffi
 ```
 
+## Supply chain
+
+```bash
+python tools/network-audit/check_offline_deps.py
+python tools/supply-chain/check_deps.py
+rradar licenses
+```
+
+Policy: [docs/SUPPLY-CHAIN.md](./docs/SUPPLY-CHAIN.md) · Notices: [THIRD_PARTY_NOTICES](./THIRD_PARTY_NOTICES).
+
 ## Develop
 
 ```bash
