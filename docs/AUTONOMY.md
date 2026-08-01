@@ -347,10 +347,33 @@ Tag: v0.1.0-cli.11
 | P2 | FRB + camera when Flutter present |
 | P3 | Release package docs polish |
 
+## Cycle 25 — release & CI productization (main axis #4)
+
+### Plan
+1. `rradar release-check` / `self-check` preflight (version, schema, engines, process, demo, api-smoke)
+2. Release archives: CHANGELOG, cli.md, privacy.md, THIRD_PARTY_NOTICES, richer VERSION
+3. CI: engines + release-check; release binary smoke uses release-check
+4. `scripts/verify-install.ps1`/`.sh`; RELEASE/INSTALL docs
+
+### Verify
+- `cargo test --workspace --locked` / clippy green  
+- `rradar release-check --fixtures fixtures` → `RELEASE_CHECK_OK`
+
+### Result
+- Install/release path has a single local gate command; packages carry license/docs surface  
+
+### Next seeds
+| Priority | Item |
+|----------|------|
+| P1 | cargo-deny / license auto-scan optional CI |
+| P2 | FRB when Flutter present |
+| P3 | Ledger tag filter / budget UX (axis #2) |
+
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
 - Green tests before re-plan  
 - Non-goals: official sync, GPT wrapper  
+
 
 
 

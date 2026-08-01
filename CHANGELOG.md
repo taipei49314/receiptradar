@@ -13,6 +13,7 @@
 - Local HTTP API expanded for product demo automation (capabilities, paths, attach, process flags)
 
 ### Added
+- **Release/CI productization:** `rradar release-check` (alias `self-check`); `scripts/verify-install.ps1`/`.sh`; release archives ship CHANGELOG/cli/privacy/THIRD_PARTY_NOTICES; CI release-check + engines; richer VERSION metadata
 - **ONNX readiness productization:** `probe_onnx_readiness`, `rradar engines [--json]`, `process --engine auto`, version/doctor readiness lines; FFI `engines_json`; mock bench p50/p95 recorded in spike-ocr-size.md
 - **Mobile capture one-shot (FFI):** `process_confirm_path_json` / `process_confirm_bytes_json`; `store_attachment_bytes` / `attach_bytes_json`; Dart `processConfirmPath` + Capture screen; capabilities `capture_oneshot`
 - **Local API product smoke:** `rradar api-smoke`; `serve` GET `/capabilities` `/paths` `/transaction`; POST `/process` `{attach,tags}` + POST `/attach`; demo step 12; `watch --attach`; CI `api-smoke` step

@@ -44,6 +44,7 @@ jobs:
         run: |
           cargo run -p rradar-cli --locked -- version
           cargo run -p rradar-cli --locked -- version --long
+          cargo run -p rradar-cli --locked -- engines
           cargo run -p rradar-cli --locked -- process fixtures/text/familymart_89.txt
           cargo run -p bench-ocr --locked -- fixtures/text
 
@@ -53,6 +54,9 @@ jobs:
       - name: local API smoke
         run: cargo run -p rradar-cli --locked -- api-smoke --fixtures fixtures --db target/ci-api-smoke/ledger.db
 
+      - name: release-check preflight
+        run: cargo run -p rradar-cli --locked -- release-check --fixtures fixtures --quiet
+
       - name: release binary smoke
         shell: bash
         run: |
@@ -60,6 +64,8 @@ jobs:
           cargo build --release -p rradar-cli --locked
           if [[ -f target/release/rradar.exe ]]; then B=target/release/rradar.exe; else B=target/release/rradar; fi
           "$B" version --long
+          "$B" engines
+          "$B" release-check --fixtures fixtures --quiet
           "$B" demo --fixtures fixtures --db target/ci-release-demo/ledger.db --quiet
 
       - name: network audit

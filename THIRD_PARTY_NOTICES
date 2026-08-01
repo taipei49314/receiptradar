@@ -1,0 +1,43 @@
+Third-Party Notices — ReceiptRadar (receiptradar)
+=================================================
+
+Project license: Apache-2.0 (see LICENSE).
+
+This file summarizes redistribution-relevant components for the default
+**mock OCR** CLI binary published in GitHub Releases. It is not a substitute
+for full license texts of each dependency; see crate sources and
+docs/licenses-checklist.md for the maintainer checklist.
+
+Core runtime (bundled / linked in default release CLI)
+------------------------------------------------------
+
+| Component              | Typical license   | Notes                                      |
+|------------------------|-------------------|--------------------------------------------|
+| SQLite (via rusqlite bundled) | public domain / blessing | amalgamation                            |
+| chacha20poly1305       | MIT OR Apache-2.0 | backup / seal AEAD                         |
+| argon2                 | MIT OR Apache-2.0 | KDF for backup.rradar / .rrsealed          |
+| hkdf, sha2             | MIT OR Apache-2.0 | hashing / key derivation                   |
+| serde / serde_json     | MIT OR Apache-2.0 | serialization                              |
+| regex                  | MIT OR Apache-2.0 | extractors                                 |
+| thiserror, anyhow      | MIT OR Apache-2.0 | errors                                     |
+| ulid                   | MIT               | ids                                        |
+| rand, zeroize          | MIT OR Apache-2.0 | crypto hygiene                             |
+
+Optional (NOT in default release binary)
+----------------------------------------
+
+| Component              | License           | Notes                                      |
+|------------------------|-------------------|--------------------------------------------|
+| ONNX Runtime (ort)     | MIT               | load-dynamic; user installs separately     |
+| RapidOCR / Paddle weights | Apache-2.0 lineage | pinned in models/manifest.sha256; not git |
+| paddle-ocr-rs          | (crate license)   | only with `--features onnx` builds         |
+| Flutter / plugins      | various           | mobile shell; separate from CLI release    |
+
+Policy
+------
+
+- No official cloud sync, account, or relay.
+- Model weights are never silently embedded without hash pins + user fetch.
+- Network audit in CI fails unexpected egress strings in source.
+
+Maintainer: re-run `docs/licenses-checklist.md` before public v0.1.0.

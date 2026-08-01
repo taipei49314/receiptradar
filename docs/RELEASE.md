@@ -8,8 +8,12 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --locked
 cargo build --release -p rradar-cli --locked
 ./target/release/rradar version --long
+./target/release/rradar engines
+./target/release/rradar release-check --fixtures fixtures
 ./target/release/rradar demo --fixtures fixtures --db /tmp/rradar-rel-demo.db --quiet
 python tools/network-audit/check_offline_deps.py
+# optional post-install style:
+# ./scripts/verify-install.sh ./target/release/rradar
 ```
 
 Windows:
@@ -17,11 +21,14 @@ Windows:
 ```powershell
 powershell -File scripts/smoke-cli.ps1
 powershell -File scripts/demo.ps1
+cargo run -p rradar-cli -- release-check --fixtures fixtures
+powershell -File scripts/verify-install.ps1 -Bin target\release\rradar.exe
 ```
 
 Also:
 
 - [ ] `docs/licenses-checklist.md` reviewed for binary deps  
+- [ ] `THIRD_PARTY_NOTICES` still accurate for default mock CLI  
 - [ ] CHANGELOG updated  
 - [ ] `docs/INSTALL.md` still accurate for artifact names  
 
@@ -50,8 +57,10 @@ git push origin v0.1.0-cli.N
 |------|---------|
 | fmt / clippy / test `--locked` | Correctness |
 | `rradar-ffi` tests | Mobile contract |
-| cli smoke + demo | Product path |
-| **release binary smoke** | `cargo build --release` + demo |
+| cli smoke + engines | Product path |
+| demo + api-smoke | Closed loops |
+| **release-check** | Pre-flight gate (process/demo/api) |
+| **release binary smoke** | `cargo build --release` + release-check + demo |
 | network audit | No surprise egress in source |
 
 ## Install from release

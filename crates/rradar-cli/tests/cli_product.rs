@@ -266,3 +266,26 @@ fn demo_closed_loop() {
     assert!(stdout.contains("DEMO_OK"), "{stdout}");
     assert!(db.is_file(), "demo ledger not created");
 }
+
+#[test]
+fn release_check_ok() {
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    assert!(fixtures.is_dir(), "fixtures missing");
+    let out = bin()
+        .args([
+            "release-check",
+            "--fixtures",
+            fixtures.to_str().unwrap(),
+            "--quiet",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "release-check: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("RELEASE_CHECK_OK"), "{stdout}");
+}

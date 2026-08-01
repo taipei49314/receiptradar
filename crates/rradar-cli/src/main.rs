@@ -38,6 +38,7 @@ fn main() -> ExitCode {
         "config" => cmd_config(&args[1..]),
         "doctor" => cmd_doctor(&args[1..]),
         "engines" => cmd_engines(&args[1..]),
+        "release-check" | "self-check" => cmd_release_check(&args[1..]),
         "demo" => cmd_demo(&args[1..]),
         "process" | "add" => cmd_process(&args[1..]),
         "manual" | "entry" => cmd_manual(&args[1..]),
@@ -165,6 +166,181 @@ fn cmd_engines(args: &[String]) -> Result<(), String> {
     println!("  use   | rradar process FILE --engine mock|onnx|auto");
     println!("  docs  | models/README.md · scripts/smoke-onnx.ps1");
     Ok(())
+}
+
+/// Pre-flight gate for release / install verification (local-only; no network).
+///
+/// Checks identity, engines catalog, schema constant, optional process fixture,
+/// optional demo closed-loop, optional local API smoke.
+fn cmd_release_check(args: &[String]) -> Result<(), String> {
+    let mut fixtures_root: Option<PathBuf> = None;
+    let mut skip_demo = false;
+    let mut skip_api = false;
+    let mut quiet = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--fixtures" => {
+                i += 1;
+                fixtures_root = Some(PathBuf::from(args.get(i).ok_or("--fixtures needs path")?));
+            }
+            "--skip-demo" => skip_demo = true,
+            "--skip-api" => skip_api = true,
+            "--quiet" | "-q" => quiet = true,
+            "--help" | "-h" => {
+                println!(
+                    "rradar release-check [--fixtures DIR] [--skip-demo] [--skip-api] [--quiet]\n  \
+                     Local pre-flight for install/release (no network, no cloud).\n  \
+                     Alias: self-check"
+                );
+                return Ok(());
+            }
+            other => return Err(format!("unknown release-check flag `{other}`")),
+        }
+        i += 1;
+    }
+
+    let mut failed = 0usize;
+    let mut step = |name: &str, ok: bool, detail: &str| {
+        if ok {
+            if !quiet {
+                println!("  OK  | {name} | {detail}");
+            }
+        } else {
+            failed += 1;
+            println!("  FAIL| {name} | {detail}");
+        }
+    };
+
+    if !quiet {
+        println!("rradar release-check (local-first; no cloud)");
+    }
+
+    // 1) Identity
+    step(
+        "version",
+        !VERSION.is_empty() && !PRODUCT_ID.is_empty(),
+        &format!("{PRODUCT_ID} {VERSION}"),
+    );
+    step(
+        "ledger_schema",
+        LEDGER_SCHEMA_VERSION >= 3,
+        &format!("supports v{LEDGER_SCHEMA_VERSION}"),
+    );
+
+    // 2) Engines catalog
+    let eng_json = rradar_ocr::engines_catalog_json();
+    step(
+        "engines",
+        eng_json.contains("auto_resolves_to") && eng_json.contains("mock"),
+        &format!(
+            "auto→{} onnx_ready={}",
+            rradar_ocr::resolve_auto_engine_name(),
+            rradar_ocr::probe_onnx_readiness(rradar_ocr::default_models_dir()).ready_for_inference
+        ),
+    );
+
+    // 3) Policy constants (string presence in catalog)
+    step(
+        "policy",
+        eng_json.contains("no cloud") || eng_json.contains("local-first"),
+        "local-first OCR catalog",
+    );
+
+    let fixtures = fixtures_root
+        .or_else(|| env::var_os("RRADAR_FIXTURES").map(PathBuf::from))
+        .unwrap_or_else(find_fixtures_dir);
+
+    // 4) Process one fixture (mock)
+    let fam = fixtures.join("text/familymart_89.txt");
+    if fam.is_file() {
+        let eng = engine_by_name("mock").map_err(|e| e.to_string())?;
+        let cats = category_engine_with_packs();
+        match process_path(
+            &fam,
+            eng.as_ref(),
+            &cats,
+            ProcessOptions {
+                default_currency: Iso4217::TWD,
+                ..Default::default()
+            },
+        ) {
+            Ok(d) => step(
+                "process_mock",
+                d.total.value.amount_minor == 8900,
+                &format!(
+                    "{} minor={} {}",
+                    d.merchant.value, d.total.value.amount_minor, d.total.value.currency
+                ),
+            ),
+            Err(e) => step("process_mock", false, &e.to_string()),
+        }
+    } else {
+        step(
+            "process_mock",
+            false,
+            &format!("fixture missing: {} (pass --fixtures)", fam.display()),
+        );
+    }
+
+    // 5) Demo closed-loop
+    if !skip_demo {
+        if fixtures.is_dir() {
+            let home = std::env::temp_dir()
+                .join(format!("rradar-release-check-demo-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&home);
+            let db = home.join("ledger.db");
+            let demo_args = vec![
+                "--fixtures".into(),
+                fixtures.display().to_string(),
+                "--db".into(),
+                db.display().to_string(),
+                "--quiet".into(),
+            ];
+            match cmd_demo(&demo_args) {
+                Ok(()) => step("demo", true, &format!("db={}", db.display())),
+                Err(e) => step("demo", false, &e),
+            }
+            let _ = std::fs::remove_dir_all(&home);
+        } else {
+            step("demo", false, "fixtures dir missing");
+        }
+    } else if !quiet {
+        println!("  skip| demo");
+    }
+
+    // 6) Local API smoke
+    if !skip_api {
+        if fam.is_file() {
+            let home = std::env::temp_dir()
+                .join(format!("rradar-release-check-api-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&home);
+            let db = home.join("ledger.db");
+            let _ = rradar_core::Ledger::open(&db);
+            match serve::smoke_local_api(&db, &fam, None) {
+                Ok(rep) => step(
+                    "api_smoke",
+                    rep.health_ok && rep.process_confirmed && rep.transactions_n >= 1,
+                    &format!("bind={} txs={}", rep.bind, rep.transactions_n),
+                ),
+                Err(e) => step("api_smoke", false, &e),
+            }
+            let _ = std::fs::remove_dir_all(&home);
+        } else {
+            step("api_smoke", false, "fixture missing for api-smoke");
+        }
+    } else if !quiet {
+        println!("  skip| api_smoke");
+    }
+
+    if failed == 0 {
+        println!("RELEASE_CHECK_OK schema={LEDGER_SCHEMA_VERSION} version={VERSION}");
+        Ok(())
+    } else {
+        Err(format!(
+            "release-check failed ({failed} check(s)); see FAIL lines above"
+        ))
+    }
 }
 
 // --- shared flag helpers ---------------------------------------------------
@@ -2745,6 +2921,11 @@ models [status|verify|pins] [--dir models]
 engines [--json]
   Show OCR engine availability: mock, onnx readiness, auto resolution.
   process --engine auto uses onnx when feature+models ready, else mock.",
+        "release-check" | "self-check" => "\
+release-check [--fixtures DIR] [--skip-demo] [--skip-api] [--quiet]
+  Local pre-flight for release/install (no network):
+  version, schema, engines, process fixture, demo, api-smoke.
+  Alias: self-check. Exit non-zero on any FAIL.",
         "backup" => "\
 backup create -p PASS [-o file] [--db PATH]
 backup restore --in file -p PASS [--db PATH] [--merge]
@@ -2813,6 +2994,8 @@ Commands:
   init                 Create data dir + empty ledger + config
   config               Show/set local config.toml
   doctor               Environment / db check
+  engines              OCR engines readiness (mock|onnx|auto)
+  release-check        Pre-flight install/release gate (alias: self-check)
   demo                 One-command closed-loop demo (fixtures → ledger)
   path                 Print default home & db paths
   process <files…>     Parse receipt(s) (alias: add); batch OK

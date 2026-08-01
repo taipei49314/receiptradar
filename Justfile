@@ -28,6 +28,13 @@ demo:
 api-smoke:
     cargo run -q -p rradar-cli -- api-smoke --fixtures fixtures
 
+# Pre-flight for release/install (local-only)
+release-check:
+    cargo run -q -p rradar-cli -- release-check --fixtures fixtures
+
+verify-install:
+    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-install.ps1
+
 install:
     cargo install --path crates/rradar-cli --force --locked
 

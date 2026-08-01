@@ -42,6 +42,7 @@ jobs:
           "$B" version --long
           "$B" version --json
           "$B" engines
+          "$B" release-check --fixtures fixtures --quiet
           "$B" help >/dev/null
 
       - name: Package (unix)
@@ -54,8 +55,17 @@ jobs:
           cp "target/release/rradar" "$STAGE/rradar"
           cp LICENSE "$STAGE/"
           cp README.md "$STAGE/"
+          cp THIRD_PARTY_NOTICES "$STAGE/" 2>/dev/null || true
+          cp CHANGELOG.md "$STAGE/" 2>/dev/null || true
           cp docs/INSTALL.md "$STAGE/" 2>/dev/null || true
-          printf '%s\n' "${{ github.ref_name }}" > "$STAGE/VERSION"
+          cp docs/cli.md "$STAGE/" 2>/dev/null || true
+          cp docs/privacy.md "$STAGE/" 2>/dev/null || true
+          {
+            echo "${{ github.ref_name }}"
+            echo "product=receiptradar"
+            echo "ledger_schema=3"
+            echo "policy=local-first; no official cloud relay"
+          } > "$STAGE/VERSION"
           tar -czf "${STAGE}.tar.gz" "$STAGE"
           shasum -a 256 "${STAGE}.tar.gz" | tee "${STAGE}.sha256"
 
@@ -68,8 +78,17 @@ jobs:
           Copy-Item target/release/rradar.exe "$stage/rradar.exe"
           Copy-Item LICENSE "$stage/"
           Copy-Item README.md "$stage/"
+          if (Test-Path THIRD_PARTY_NOTICES) { Copy-Item THIRD_PARTY_NOTICES "$stage/" }
+          if (Test-Path CHANGELOG.md) { Copy-Item CHANGELOG.md "$stage/" }
           if (Test-Path docs/INSTALL.md) { Copy-Item docs/INSTALL.md "$stage/" }
-          Set-Content -Path "$stage/VERSION" -Value "${{ github.ref_name }}" -NoNewline
+          if (Test-Path docs/cli.md) { Copy-Item docs/cli.md "$stage/" }
+          if (Test-Path docs/privacy.md) { Copy-Item docs/privacy.md "$stage/" }
+          @(
+            "${{ github.ref_name }}"
+            "product=receiptradar"
+            "ledger_schema=3"
+            "policy=local-first; no official cloud relay"
+          ) | Set-Content -Path "$stage/VERSION"
           Compress-Archive -Path $stage -DestinationPath "$stage.zip" -Force
           $hash = (Get-FileHash "$stage.zip" -Algorithm SHA256).Hash.ToLower()
           Set-Content -Path "$stage.sha256" -Value "$hash  $stage.zip"
@@ -116,13 +135,20 @@ jobs:
             ```bash
             # verify download
             sha256sum -c rradar-*.sha256
+            # after unpack:
+            ./rradar release-check --fixtures /path/to/repo/fixtures
+            # or from a checkout with the binary on PATH:
+            # powershell -File scripts/verify-install.ps1
             ```
+
+            Archive includes: binary, LICENSE, README, INSTALL, cli.md, privacy.md, CHANGELOG, THIRD_PARTY_NOTICES, VERSION.
 
             ### Smoke
 
             ```bash
             ./rradar version --long
-            ./rradar demo --quiet   # needs fixtures checkout
+            ./rradar engines
+            ./rradar release-check --fixtures fixtures
             ```
 
             ONNX weights are **not** bundled; optional `--features onnx` build + `tools/fetch-models.*`.

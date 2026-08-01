@@ -65,7 +65,7 @@ Or use the helper:
 
 ```bash
 ./scripts/install-from-release.sh          # auto-detect OS/arch
-./scripts/install-from-release.sh v0.1.0-cli.16
+./scripts/install-from-release.sh v0.1.0-cli.17
 ```
 
 ### Windows (PowerShell)
@@ -73,9 +73,10 @@ Or use the helper:
 ```powershell
 powershell -File scripts/install-from-release.ps1
 # or pin a tag:
-powershell -File scripts/install-from-release.ps1 -Tag v0.1.0-cli.16
+powershell -File scripts/install-from-release.ps1 -Tag v0.1.0-cli.17
 rradar version --long
 rradar engines
+powershell -File scripts/verify-install.ps1
 ```
 
 Binaries land in `%USERPROFILE%\.cargo\bin` when that directory exists, else `~\bin` (printed by the script).
@@ -87,7 +88,13 @@ rradar init
 rradar process fixtures/text/familymart_89.txt --confirm --explain   # from git checkout
 rradar list
 rradar stats --all
+rradar engines
 rradar demo --quiet   # full closed loop (needs fixtures/)
+# one-shot install/release gate (process + demo + local API smoke):
+rradar release-check --fixtures fixtures
+# or helpers:
+#   ./scripts/verify-install.sh
+#   powershell -File scripts/verify-install.ps1
 ```
 
 ## Data locations
