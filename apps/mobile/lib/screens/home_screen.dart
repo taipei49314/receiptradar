@@ -4,6 +4,7 @@ import '../l10n/strings.dart';
 import '../services/prefs.dart';
 import '../services/rradar_api.dart';
 import 'about_screen.dart';
+import 'budget_screen.dart';
 import 'capture_placeholder.dart';
 import 'ledger_screen.dart';
 
@@ -75,6 +76,17 @@ class _HomeScreenState extends State<HomeScreen> {
               );
             },
             icon: const Icon(Icons.list_alt),
+          ),
+          IconButton(
+            tooltip: 'Budgets',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => BudgetScreen(strings: s),
+                ),
+              );
+            },
+            icon: const Icon(Icons.savings_outlined),
           ),
           IconButton(
             tooltip: s.aboutTitle,

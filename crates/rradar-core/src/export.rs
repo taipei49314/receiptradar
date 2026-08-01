@@ -1,12 +1,14 @@
 //! CSV / JSON export and backup.rradar packaging.
 
 use crate::attachments::{collect_attachment_files, write_attachment_files, AttachmentError};
+use crate::budget::BudgetBook;
 use crate::crypto::{seal_backup, unseal_backup, CryptoError, ARGON2_M_KIB};
 use crate::ledger::{Ledger, LedgerError, Transaction};
 use crate::pipeline::utc_now_iso;
 use crate::VERSION;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -40,6 +42,9 @@ pub struct BackupManifest {
     /// Number of receipt attachment blobs packed under `attachments/` (0 if none / legacy).
     #[serde(default)]
     pub attachment_count: u32,
+    /// True when `budgets.toml` was packed (local soft budgets; not SQLite).
+    #[serde(default)]
+    pub has_budgets: bool,
 }
 
 /// Opened backup with archive inventory (for `backup info` / verify).
@@ -50,6 +55,24 @@ pub struct BackupInspect {
     pub has_sqlite: bool,
     pub has_transactions_json: bool,
     pub attachment_file_count: usize,
+    pub has_budgets: bool,
+}
+
+/// Locate a budgets.toml near the ledger or under the default data dir.
+pub fn find_budgets_file(ledger_path: &Path) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(parent) = ledger_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            candidates.push(parent.join("budgets.toml"));
+        }
+    }
+    candidates.push(BudgetBook::path());
+    candidates.into_iter().find(|p| p.is_file())
+}
+
+fn collect_budgets_bytes(ledger_path: &Path) -> Option<Vec<u8>> {
+    let path = find_budgets_file(ledger_path)?;
+    std::fs::read(path).ok()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -148,7 +171,8 @@ pub fn transactions_to_json(rows: &[Transaction]) -> Result<String, ExportError>
 
 /// Create encrypted backup.rradar bytes from ledger.
 ///
-/// Includes optional receipt blobs from `{db_parent}/attachments/**` when present.
+/// Includes optional receipt blobs from `{db_parent}/attachments/**` and
+/// optional local soft budgets (`budgets.toml`) when present.
 pub fn create_backup(
     ledger: &Ledger,
     passphrase: &str,
@@ -158,6 +182,7 @@ pub fn create_backup(
     let sqlite = ledger.export_sqlite_bytes()?;
     let ledger_schema = ledger.schema_version_u32().unwrap_or(0);
     let att_files = collect_attachment_files(ledger.path())?;
+    let budgets = collect_budgets_bytes(ledger.path());
     let manifest = BackupManifest {
         schema_version: 1,
         created_at: utc_now_iso(),
@@ -165,15 +190,20 @@ pub fn create_backup(
         transaction_count: txs.len() as i64,
         ledger_schema_version: ledger_schema,
         attachment_count: att_files.len() as u32,
+        has_budgets: budgets.is_some(),
     };
     let manifest_json = serde_json::to_vec_pretty(&manifest)?;
     let txs_json = serde_json::to_vec(&txs)?;
 
-    // Own all payloads so we can pack a dynamic file list (core + attachments).
-    let mut owned: Vec<(String, Vec<u8>)> = Vec::with_capacity(3 + att_files.len());
+    // Own all payloads so we can pack a dynamic file list (core + attachments + budgets).
+    let mut owned: Vec<(String, Vec<u8>)> =
+        Vec::with_capacity(4 + att_files.len() + budgets.is_some() as usize);
     owned.push(("manifest.json".into(), manifest_json));
     owned.push(("ledger.sqlite".into(), sqlite));
     owned.push(("transactions.json".into(), txs_json));
+    if let Some(b) = budgets {
+        owned.push(("budgets.toml".into(), b));
+    }
     owned.extend(att_files);
 
     let refs: Vec<(&str, &[u8])> = owned
@@ -191,6 +221,7 @@ pub fn inspect_backup(passphrase: &str, sealed: &[u8]) -> Result<BackupInspect, 
     let mut manifest: Option<BackupManifest> = None;
     let mut has_sqlite = false;
     let mut has_transactions_json = false;
+    let mut has_budgets = false;
     let mut attachment_file_count = 0usize;
     let mut files = Vec::with_capacity(files_raw.len());
     for (name, data) in &files_raw {
@@ -199,6 +230,7 @@ pub fn inspect_backup(passphrase: &str, sealed: &[u8]) -> Result<BackupInspect, 
             "manifest.json" => manifest = Some(serde_json::from_slice(data)?),
             "ledger.sqlite" => has_sqlite = true,
             "transactions.json" => has_transactions_json = true,
+            "budgets.toml" => has_budgets = true,
             n if n.starts_with("attachments/") => attachment_file_count += 1,
             _ => {}
         }
@@ -207,13 +239,17 @@ pub fn inspect_backup(passphrase: &str, sealed: &[u8]) -> Result<BackupInspect, 
             bytes: data.len(),
         });
     }
-    let manifest = manifest.ok_or_else(|| ExportError::Format("missing manifest".into()))?;
+    let mut manifest = manifest.ok_or_else(|| ExportError::Format("missing manifest".into()))?;
+    if has_budgets {
+        manifest.has_budgets = true;
+    }
     Ok(BackupInspect {
         manifest,
         files,
         has_sqlite,
         has_transactions_json,
         attachment_file_count,
+        has_budgets,
     })
 }
 
@@ -257,6 +293,8 @@ pub struct RestoredBackup {
     pub sqlite_bytes: Option<Vec<u8>>,
     /// Attachment archive entries (`attachments/...` → bytes).
     pub attachments: Vec<(String, Vec<u8>)>,
+    /// Optional local soft budgets file.
+    pub budgets_toml: Option<Vec<u8>>,
 }
 
 pub fn restore_backup(passphrase: &str, sealed: &[u8]) -> Result<RestoredBackup, ExportError> {
@@ -265,6 +303,7 @@ pub fn restore_backup(passphrase: &str, sealed: &[u8]) -> Result<RestoredBackup,
     let mut manifest: Option<BackupManifest> = None;
     let mut transactions_json = None;
     let mut sqlite_bytes = None;
+    let mut budgets_toml = None;
     let mut attachments = Vec::new();
     for (name, data) in files {
         let norm = name.replace('\\', "/");
@@ -274,16 +313,21 @@ pub fn restore_backup(passphrase: &str, sealed: &[u8]) -> Result<RestoredBackup,
             }
             "transactions.json" => transactions_json = Some(data),
             "ledger.sqlite" => sqlite_bytes = Some(data),
+            "budgets.toml" => budgets_toml = Some(data),
             n if n.starts_with("attachments/") => attachments.push((norm, data)),
             _ => {}
         }
     }
-    let manifest = manifest.ok_or_else(|| ExportError::Format("missing manifest".into()))?;
+    let mut manifest = manifest.ok_or_else(|| ExportError::Format("missing manifest".into()))?;
+    if budgets_toml.is_some() {
+        manifest.has_budgets = true;
+    }
     Ok(RestoredBackup {
         manifest,
         transactions_json,
         sqlite_bytes,
         attachments,
+        budgets_toml,
     })
 }
 
@@ -304,6 +348,31 @@ pub fn write_restored_attachments(
     restored: &RestoredBackup,
 ) -> Result<usize, ExportError> {
     Ok(write_attachment_files(db_path, &restored.attachments)?)
+}
+
+/// Write restored `budgets.toml` next to the ledger and into the default data dir.
+///
+/// Returns whether a budgets file was written.
+pub fn write_restored_budgets(
+    db_path: &Path,
+    restored: &RestoredBackup,
+) -> Result<bool, ExportError> {
+    let Some(bytes) = restored.budgets_toml.as_ref() else {
+        return Ok(false);
+    };
+    if let Some(parent) = db_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+            std::fs::write(parent.join("budgets.toml"), bytes)?;
+        }
+    }
+    // Also hydrate the process default data dir so `rradar budget status` sees it.
+    let global = BudgetBook::path();
+    if let Some(parent) = global.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(global, bytes)?;
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -356,6 +425,39 @@ mod tests {
         assert_eq!(m.transaction_count, 1);
         let txs = transactions_from_backup(&restore_backup("secret", &sealed).unwrap()).unwrap();
         assert_eq!(txs.len(), 1);
+    }
+
+    #[test]
+    fn backup_includes_budgets_toml() {
+        let tmp = std::env::temp_dir().join(format!("rradar-bak-bud-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let db_path = tmp.join("ledger.db");
+        let ledger = Ledger::open(&db_path).unwrap();
+        ledger
+            .confirm_draft(&draft(), Some("h"), Some("note"), false)
+            .unwrap();
+        let budgets = tmp.join("budgets.toml");
+        std::fs::write(
+            &budgets,
+            "# test\nmonthly.TWD = 1000\ncategory.TWD.food_dining = 500\n",
+        )
+        .unwrap();
+
+        let sealed = create_backup(&ledger, "secret", 8).unwrap();
+        let info = inspect_backup("secret", &sealed).unwrap();
+        assert!(info.has_budgets, "expected budgets.toml in archive");
+        assert!(info.manifest.has_budgets);
+
+        let dest = tmp.join("restored");
+        std::fs::create_dir_all(&dest).unwrap();
+        let dest_db = dest.join("ledger.db");
+        let restored = restore_backup("secret", &sealed).unwrap();
+        write_restored_db(&dest_db, restored.sqlite_bytes.as_ref().unwrap()).unwrap();
+        assert!(write_restored_budgets(&dest_db, &restored).unwrap());
+        let got = std::fs::read_to_string(dest.join("budgets.toml")).unwrap();
+        assert!(got.contains("monthly.TWD"));
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

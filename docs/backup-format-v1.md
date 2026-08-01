@@ -36,13 +36,14 @@ Required entries:
 | `ledger.sqlite` | SQLite DB bytes |
 | `transactions.json` | Array of transaction rows (convenience; used by `--merge` / `import backup`) |
 
-Optional entries (schema v3 attachment store):
+Optional entries (schema v3 attachment store + local budgets):
 
 | Name | Content |
 |------|---------|
 | `attachments/{tx_id}/{filename}` | Raw receipt file bytes (copied from `{db_parent}/attachments/`) |
+| `budgets.toml` | Soft monthly limits (major units); also written to data dir on restore |
 
-On `backup restore` / `restore --merge`, attachment entries are written next to the target ledger so relative `attachment_path` values keep working. Handoff packages use the same optional layout.
+On `backup restore` / `restore --merge`, attachment entries are written next to the target ledger so relative `attachment_path` values keep working. Optional `budgets.toml` is written beside the ledger **and** into the default data dir (`rradar budget status`). Handoff packages use the same optional layout. Manifest may set `has_budgets`.
 
 CLI helpers: `rradar backup info|verify|restore [--merge]`. Multi-device = user-mediated file copy only (no official relay). See [ledger-schema.md](./ledger-schema.md).
 

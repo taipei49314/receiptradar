@@ -2,6 +2,8 @@
 ///
 /// Mirrors `crates/rradar-ffi` free functions. Until flutter_rust_bridge
 /// generates native bindings, [MockRradarApi] drives the shell UI.
+///
+/// Full function map: `docs/frb-contract.md`.
 library;
 
 /// Capability blob (JSON-decoded map).
@@ -19,6 +21,9 @@ class RradarCapabilities {
     required this.attachmentStore,
     required this.backupIncludesAttachments,
     required this.captureOneshot,
+    required this.engineAuto,
+    required this.tagFilter,
+    required this.localBudgets,
     required this.notes,
   });
 
@@ -34,6 +39,9 @@ class RradarCapabilities {
   final bool attachmentStore;
   final bool backupIncludesAttachments;
   final bool captureOneshot;
+  final bool engineAuto;
+  final bool tagFilter;
+  final bool localBudgets;
   final String notes;
 
   factory RradarCapabilities.fromJson(Map<String, dynamic> j) {
@@ -51,6 +59,9 @@ class RradarCapabilities {
       backupIncludesAttachments:
           j['backup_includes_attachments'] as bool? ?? false,
       captureOneshot: j['capture_oneshot'] as bool? ?? false,
+      engineAuto: j['engine_auto'] as bool? ?? false,
+      tagFilter: j['tag_filter'] as bool? ?? false,
+      localBudgets: j['local_budgets'] as bool? ?? false,
       notes: j['notes'] as String? ?? '',
     );
   }
@@ -87,15 +98,33 @@ abstract class RradarApi {
   Future<void> ensureLedger(String dbPath);
   Future<int> count(String dbPath);
   Future<String> listJson(String dbPath, {int limit = 50});
+  Future<String> queryJson(
+    String dbPath, {
+    int limit = 50,
+    String? tag,
+    String? category,
+    String? query,
+  });
+  Future<String> listTagsJson(String dbPath);
+  Future<String> budgetStatusJson(
+    String dbPath, {
+    int year = 2024,
+    int month = 5,
+  });
+  Future<String> enginesJson();
   Future<String> statsAllJson(String dbPath);
   Future<String> reportMonthMarkdown(String dbPath, {int year = 2024, int month = 5});
   Future<String> listRulePacksJson();
   Future<String> modelsPinsJson({String modelsDir = ''});
 }
 
+/// Global mock used by shell until FRB is generated.
+final RradarApi rradarApi = MockRradarApi();
+
 /// In-process mock so UI builds without native libs.
 class MockRradarApi implements RradarApi {
   final List<Map<String, dynamic>> _tx = [];
+  final Map<String, int> _budgetMinor = {'TWD': 3000000}; // 30000 major * 100
 
   @override
   Future<String> apiVersion() async => 'receiptradar ffi mock 0.1.0-alpha.0';
@@ -115,6 +144,9 @@ class MockRradarApi implements RradarApi {
       attachmentStore: true,
       backupIncludesAttachments: true,
       captureOneshot: true,
+      engineAuto: true,
+      tagFilter: true,
+      localBudgets: true,
       notes: 'mock api — local-first; multi-device via backup/handoff file only',
     );
   }
@@ -198,8 +230,38 @@ class MockRradarApi implements RradarApi {
 
   @override
   Future<String> listJson(String dbPath, {int limit = 50}) async {
-    final slice = _tx.take(limit).toList();
-    // Minimal JSON array without dart:convert dependency for shell.
+    return queryJson(dbPath, limit: limit);
+  }
+
+  @override
+  Future<String> queryJson(
+    String dbPath, {
+    int limit = 50,
+    String? tag,
+    String? category,
+    String? query,
+  }) async {
+    var rows = _tx.toList();
+    if (tag != null && tag.isNotEmpty) {
+      rows = rows
+          .where((t) => (t['tags'] as String? ?? '')
+              .split(',')
+              .map((s) => s.trim())
+              .contains(tag))
+          .toList();
+    }
+    if (category != null && category.isNotEmpty) {
+      rows = rows.where((t) => t['category'] == category).toList();
+    }
+    if (query != null && query.isNotEmpty) {
+      final q = query.toLowerCase();
+      rows = rows.where((t) {
+        final blob =
+            '${t['merchant']}${t['category']}${t['tags']}'.toLowerCase();
+        return blob.contains(q);
+      }).toList();
+    }
+    final slice = rows.take(limit).toList();
     if (slice.isEmpty) return '[]';
     final parts = slice.map((t) {
       return '{"id":"${t['id']}","merchant":"${t['merchant']}",'
@@ -208,6 +270,41 @@ class MockRradarApi implements RradarApi {
     });
     return '[${parts.join(',')}]';
   }
+
+  @override
+  Future<String> listTagsJson(String dbPath) async {
+    final set = <String>{};
+    for (final t in _tx) {
+      for (final part in (t['tags'] as String? ?? '').split(',')) {
+        final s = part.trim();
+        if (s.isNotEmpty) set.add(s);
+      }
+    }
+    if (set.isEmpty) return '[]';
+    return '[${set.map((s) => '"$s"').join(',')}]';
+  }
+
+  @override
+  Future<String> budgetStatusJson(
+    String dbPath, {
+    int year = 2024,
+    int month = 5,
+  }) async {
+    var spent = 0;
+    for (final t in _tx) {
+      if (t['currency'] == 'TWD') spent += t['amount_minor'] as int;
+    }
+    final limit = _budgetMinor['TWD'] ?? 0;
+    final over = spent > limit && limit > 0;
+    final ratio = limit == 0 ? 0.0 : spent / limit;
+    return '[{"currency":"TWD","category":null,"year":$year,"month":$month,'
+        '"limit_minor":$limit,"spent_minor":$spent,'
+        '"remaining_minor":${limit - spent},"ratio":$ratio,"over":$over}]';
+  }
+
+  @override
+  Future<String> enginesJson() async =>
+      '{"default":"mock","auto_resolves_to":"mock","engines":[{"name":"mock","available":true}]}';
 
   @override
   Future<String> statsAllJson(String dbPath) async {
@@ -228,6 +325,7 @@ class MockRradarApi implements RradarApi {
     final n = _tx.length;
     return '# ReceiptRadar report $year-${month.toString().padLeft(2, '0')}\n\n'
         'Mock ledger: **$n** transactions.\n\n'
+        '## Budgets\n\nLocal soft limits (no cloud).\n\n'
         'Local-first · no cloud relay.\n';
   }
 
@@ -242,7 +340,7 @@ class MockRradarApi implements RradarApi {
 /// Placeholder for generated FRB bindings — throws until wired.
 class NativeRradarApi implements RradarApi {
   UnsupportedError get _e => UnsupportedError(
-        'NativeRradarApi: generate flutter_rust_bridge bindings (docs/ffi.md)',
+        'NativeRradarApi: generate flutter_rust_bridge bindings (docs/frb-contract.md)',
       );
 
   @override
@@ -294,6 +392,30 @@ class NativeRradarApi implements RradarApi {
   Future<String> listJson(String dbPath, {int limit = 50}) async => throw _e;
 
   @override
+  Future<String> queryJson(
+    String dbPath, {
+    int limit = 50,
+    String? tag,
+    String? category,
+    String? query,
+  }) async =>
+      throw _e;
+
+  @override
+  Future<String> listTagsJson(String dbPath) async => throw _e;
+
+  @override
+  Future<String> budgetStatusJson(
+    String dbPath, {
+    int year = 2024,
+    int month = 5,
+  }) async =>
+      throw _e;
+
+  @override
+  Future<String> enginesJson() async => throw _e;
+
+  @override
   Future<String> statsAllJson(String dbPath) async => throw _e;
 
   @override
@@ -310,6 +432,3 @@ class NativeRradarApi implements RradarApi {
   @override
   Future<String> modelsPinsJson({String modelsDir = ''}) async => throw _e;
 }
-
-/// App-wide default until DI / FRB lands.
-RradarApi rradarApi = MockRradarApi();

@@ -10,9 +10,11 @@
 - `rradar serve` loopback enforcement in server; GET `/models`; demo steps for report + model pins
 - CSV export includes `tags` and `attachment_path` columns
 - Backup/handoff packages optionally pack `attachments/**` blobs; restore rehydrates them
+- Backup/handoff also pack optional `budgets.toml` (soft limits); restore rehydrates
 - Local HTTP API expanded for product demo automation (capabilities, paths, attach, process flags)
 
 ### Added
+- **Mobile FFI parity (axis #3):** Dart query/tags/budget/engines API; Budget screen + ledger tag filter; `docs/frb-contract.md` FRB generate checklist
 - **Supply-chain / release trust (axis #4):** `tools/supply-chain/check_deps.py` (forbidden license gate + inventory); `rradar licenses`; CI supply-chain step; `docs/SUPPLY-CHAIN.md`; release-check verifies LICENSE + THIRD_PARTY_NOTICES
 - **Demo showcase + product search closed-loop (axis #5):** `docs/demo-showcase.md`; local API `/tags` `/budget` + rich `/transactions` filters; filtered `export`; doctor budgets line; api-smoke hits tag filter
 - **Tag filter + local budgets (axis #2):** `TxFilter` / `list --tag|--category|--from|--to|--min-amount|--max-amount|--has-attachment`; `rradar tags`; `rradar budget set|status|list|clear` (`budgets.toml`); report Budgets section; FFI `query_transactions_json` / `budget_status_json`

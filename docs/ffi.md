@@ -72,8 +72,8 @@ cargo build -p rradar-ffi --release
 ### Backup / handoff (no cloud)
 | Function | Purpose |
 |----------|---------|
-| `backup_create_file` | Encrypted backup.rradar (**includes attachment blobs**) |
-| `handoff_create_file` | Multi-device handoff package (+ attachments) |
+| `backup_create_file` | Encrypted backup.rradar (**attachments + budgets.toml** when present) |
+| `handoff_create_file` | Multi-device handoff package (+ attachments + budgets) |
 | `handoff_info_json` | Inspect handoff |
 | `handoff_apply_merge_json` | Merge into local ledger (+ rehydrate blobs) |
 

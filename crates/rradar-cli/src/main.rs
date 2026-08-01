@@ -10,9 +10,9 @@ use rradar_core::{
     monthly_markdown_with_budgets, normalize_tags, open_ledger_auto, process_path,
     remove_stored_attachment, resolve_attachment_path, restore_backup, rules_dir, save_sealed,
     store_attachment, transactions_from_backup, transactions_to_csv, transactions_to_json,
-    verify_backup, write_handoff_file, write_restored_attachments, write_restored_db, AppConfig,
-    BudgetBook, Iso4217, Money, ProcessOptions, ReceiptDraft, Transaction, TxFilter, TxUpdate,
-    UserEdits, LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
+    verify_backup, write_handoff_file, write_restored_attachments, write_restored_budgets,
+    write_restored_db, AppConfig, BudgetBook, Iso4217, Money, ProcessOptions, ReceiptDraft,
+    Transaction, TxFilter, TxUpdate, UserEdits, LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
 };
 use rradar_ocr::engine_by_name;
 use std::env;
@@ -1479,8 +1479,10 @@ fn cmd_import(args: &[String]) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             let att_n =
                 write_restored_attachments(ledger.path(), &restored).map_err(|e| e.to_string())?;
+            let bud =
+                write_restored_budgets(ledger.path(), &restored).map_err(|e| e.to_string())?;
             println!(
-                "import backup | inserted={ins} skipped={skip} attachments={att_n} (from {} txs; multi-device via backup only)",
+                "import backup | inserted={ins} skipped={skip} attachments={att_n} budgets={bud} (from {} txs; multi-device via backup only)",
                 rows.len()
             );
             maybe_reseal(&flags, &ledger, tmp)?;
@@ -3179,8 +3181,10 @@ fn cmd_backup(args: &[String]) -> Result<(), String> {
                     .map_err(|e| e.to_string())?;
                 let att_n = write_restored_attachments(ledger.path(), &restored)
                     .map_err(|e| e.to_string())?;
+                let bud =
+                    write_restored_budgets(ledger.path(), &restored).map_err(|e| e.to_string())?;
                 println!(
-                    "restored(merge)\tinserted={ins}\tskipped={skip}\tattachments={att_n}\t-> {}",
+                    "restored(merge)\tinserted={ins}\tskipped={skip}\tattachments={att_n}\tbudgets={bud}\t-> {}",
                     db.display()
                 );
                 if let Some(t) = tmp {
@@ -3194,10 +3198,11 @@ fn cmd_backup(args: &[String]) -> Result<(), String> {
                 write_restored_db(&db, sqlite).map_err(|e| e.to_string())?;
                 let att_n =
                     write_restored_attachments(&db, &restored).map_err(|e| e.to_string())?;
+                let bud = write_restored_budgets(&db, &restored).map_err(|e| e.to_string())?;
                 // Open once so migrations apply if restoring older schema snapshot.
                 let ledger = rradar_core::Ledger::open(&db).map_err(|e| e.to_string())?;
                 println!(
-                    "restored\t{} txs\tattachments={att_n}\tschema={}\t-> {}",
+                    "restored\t{} txs\tattachments={att_n}\tbudgets={bud}\tschema={}\t-> {}",
                     restored.manifest.transaction_count,
                     ledger.schema_version().unwrap_or_default(),
                     db.display()

@@ -16,7 +16,8 @@ UI (Dart)  →  RradarApi facade  →  [Mock now | FRB later]  →  rradar-ffi  
 
 - No official cloud sync / relay.
 - Multi-device: encrypted backup / **handoff** files only.
-- Schema **v3**: tags + attachment_path via FFI; **capture one-shot** `process_confirm_*` (path/bytes → confirm → attach).
+- Schema **v3**: tags + attachment_path via FFI; **capture one-shot** `process_confirm_*`.
+- **Tag filter** ledger UI + **Budgets** screen (mock API); FRB map: [docs/frb-contract.md](../../docs/frb-contract.md).
 
 ## Run (when Flutter is installed)
 

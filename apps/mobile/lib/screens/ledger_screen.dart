@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../l10n/strings.dart';
 import '../services/rradar_api.dart';
 
-/// Simple ledger list driven by [RradarApi] (mock until FRB).
+/// Ledger list with optional tag filter (mock until FRB).
 class LedgerScreen extends StatefulWidget {
   const LedgerScreen({super.key, required this.strings});
 
@@ -15,8 +15,11 @@ class LedgerScreen extends StatefulWidget {
 
 class _LedgerScreenState extends State<LedgerScreen> {
   String _raw = '[]';
+  String _tags = '[]';
   int _count = 0;
   String? _error;
+  String? _tagFilter;
+  final _tagCtrl = TextEditingController();
 
   @override
   void initState() {
@@ -24,16 +27,28 @@ class _LedgerScreenState extends State<LedgerScreen> {
     _load();
   }
 
+  @override
+  void dispose() {
+    _tagCtrl.dispose();
+    super.dispose();
+  }
+
   Future<void> _load() async {
     try {
       final path = await rradarApi.defaultLedgerPath();
       await rradarApi.ensureLedger(path);
       final n = await rradarApi.count(path);
-      final list = await rradarApi.listJson(path, limit: 50);
+      final list = await rradarApi.queryJson(
+        path,
+        limit: 50,
+        tag: _tagFilter,
+      );
+      final tags = await rradarApi.listTagsJson(path);
       if (!mounted) return;
       setState(() {
         _count = n;
         _raw = list;
+        _tags = tags;
         _error = null;
       });
     } catch (e) {
@@ -60,23 +75,63 @@ class _LedgerScreenState extends State<LedgerScreen> {
         padding: const EdgeInsets.all(16),
         child: _error != null
             ? Center(child: Text(_error!))
-            : _count == 0
-                ? Center(child: Text(s.emptyLedger, textAlign: TextAlign.center))
-                : ListView(
+            : ListView(
+                children: [
+                  Text(
+                    '$_count transactions · filter tag: ${_tagFilter ?? "(all)"}',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 8),
+                  Text('tags: $_tags',
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodySmall
+                          ?.copyWith(fontFamily: 'monospace')),
+                  const SizedBox(height: 8),
+                  Row(
                     children: [
-                      Text(
-                        '$_count transactions (mock API until FRB)',
-                        style: Theme.of(context).textTheme.titleSmall,
+                      Expanded(
+                        child: TextField(
+                          controller: _tagCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Tag filter',
+                            hintText: 'demo',
+                            isDense: true,
+                          ),
+                          onSubmitted: (v) {
+                            setState(() {
+                              _tagFilter = v.trim().isEmpty ? null : v.trim();
+                            });
+                            _load();
+                          },
+                        ),
                       ),
-                      const SizedBox(height: 12),
-                      SelectableText(
-                        _raw,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              fontFamily: 'monospace',
-                            ),
+                      const SizedBox(width: 8),
+                      FilledButton.tonal(
+                        onPressed: () {
+                          setState(() {
+                            _tagFilter = _tagCtrl.text.trim().isEmpty
+                                ? null
+                                : _tagCtrl.text.trim();
+                          });
+                          _load();
+                        },
+                        child: const Text('Filter'),
                       ),
                     ],
                   ),
+                  const SizedBox(height: 12),
+                  if (_count == 0)
+                    Text(s.emptyLedger, textAlign: TextAlign.center)
+                  else
+                    SelectableText(
+                      _raw,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            fontFamily: 'monospace',
+                          ),
+                    ),
+                ],
+              ),
       ),
     );
   }

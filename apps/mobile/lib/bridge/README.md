@@ -14,6 +14,8 @@
 2. Generate bindings from `rradar_ffi` into `lib/bridge/generated/`.
 3. Implement `NativeRradarApi` by calling generated methods (handoff/rules/models included).
 4. Swap `rradarApi = NativeRradarApi()` when native lib loads.
+
+Full free-function list: [docs/frb-contract.md](../../../../docs/frb-contract.md).
 5. Android: `cargo ndk` → `librradar_ffi.so` (see `docs/android-ffi.md`).
 
 ## Privacy

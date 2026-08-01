@@ -58,7 +58,9 @@ Indexes: date+currency, merchant, invoice_id, content_hash.
 
 ### Local budgets (not in SQLite)
 
-Soft monthly limits live in **`{data_dir}/budgets.toml`** (major units). Never mixed across currencies. CLI: `rradar budget set|status|list`. Reports embed a **Budgets** section when lines exist.
+Soft monthly limits live in **`{data_dir}/budgets.toml`** (major units), optionally also next to a custom ledger. Never mixed across currencies. CLI: `rradar budget set|status|list`. Reports embed a **Budgets** section when lines exist.
+
+**Multi-device:** `backup create` / handoff packages include `budgets.toml` when present; restore rehydrates the file (no cloud).
 
 ## Attachment store (local)
 

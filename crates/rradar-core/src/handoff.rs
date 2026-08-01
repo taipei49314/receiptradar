@@ -1,8 +1,9 @@
 //! Local multi-device handoff packages (file-based; no cloud relay).
 
 use crate::attachments::{collect_attachment_files, write_attachment_files};
+use crate::budget::BudgetBook;
 use crate::crypto::{seal_backup, unseal_backup, ARGON2_M_KIB};
-use crate::export::{pack_archive, unpack_archive, ExportError};
+use crate::export::{find_budgets_file, pack_archive, unpack_archive, ExportError};
 use crate::ledger::Ledger;
 use crate::pipeline::utc_now_iso;
 use crate::{LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION};
@@ -21,6 +22,9 @@ pub struct HandoffManifest {
     /// Receipt attachment blobs packed under `attachments/` (0 if none / legacy).
     #[serde(default)]
     pub attachment_count: u32,
+    /// Soft budgets file packed as `budgets.toml`.
+    #[serde(default)]
+    pub has_budgets: bool,
 }
 
 /// Create encrypted handoff blob (same crypto family as backup.rradar).
@@ -33,6 +37,7 @@ pub fn create_handoff(
     let txs = ledger.export_all()?;
     let txs_json = serde_json::to_vec_pretty(&txs)?;
     let att_files = collect_attachment_files(ledger.path())?;
+    let budgets = find_budgets_file(ledger.path()).and_then(|p| std::fs::read(p).ok());
     let manifest = HandoffManifest {
         format: "rradar-handoff-v1".into(),
         schema_version: LEDGER_SCHEMA_VERSION,
@@ -42,12 +47,17 @@ pub fn create_handoff(
         transaction_count: txs.len() as i64,
         note: format!("{PRODUCT_ID} multi-device handoff; decrypt offline only"),
         attachment_count: att_files.len() as u32,
+        has_budgets: budgets.is_some(),
     };
     let man = serde_json::to_vec_pretty(&manifest)?;
-    let mut owned: Vec<(String, Vec<u8>)> = Vec::with_capacity(3 + att_files.len());
+    let mut owned: Vec<(String, Vec<u8>)> =
+        Vec::with_capacity(4 + att_files.len() + budgets.is_some() as usize);
     owned.push(("handoff.json".into(), man));
     owned.push(("ledger.sqlite".into(), sqlite));
     owned.push(("transactions.json".into(), txs_json));
+    if let Some(b) = budgets {
+        owned.push(("budgets.toml".into(), b));
+    }
     owned.extend(att_files);
     let refs: Vec<(&str, &[u8])> = owned
         .iter()
@@ -83,21 +93,38 @@ pub fn apply_handoff_merge(
     let files = unpack_archive(&plain)?;
     let mut manifest: Option<HandoffManifest> = None;
     let mut txs_json: Option<Vec<u8>> = None;
+    let mut budgets_toml: Option<Vec<u8>> = None;
     let mut attachments: Vec<(String, Vec<u8>)> = Vec::new();
     for (name, data) in files {
         let norm = name.replace('\\', "/");
         match norm.as_str() {
             "handoff.json" => manifest = Some(serde_json::from_slice(&data)?),
             "transactions.json" => txs_json = Some(data),
+            "budgets.toml" => budgets_toml = Some(data),
             n if n.starts_with("attachments/") => attachments.push((norm, data)),
             _ => {}
         }
     }
-    let manifest = manifest.ok_or_else(|| ExportError::Format("missing handoff.json".into()))?;
+    let mut manifest =
+        manifest.ok_or_else(|| ExportError::Format("missing handoff.json".into()))?;
     let raw = txs_json.ok_or_else(|| ExportError::Format("missing transactions.json".into()))?;
     let rows: Vec<crate::ledger::Transaction> = serde_json::from_slice(&raw)?;
     let (ins, skip) = target.import_transactions(&rows)?;
     let _ = write_attachment_files(target.path(), &attachments)?;
+    if let Some(bytes) = budgets_toml {
+        manifest.has_budgets = true;
+        if let Some(parent) = target.path().parent() {
+            if !parent.as_os_str().is_empty() {
+                let _ = std::fs::create_dir_all(parent);
+                let _ = std::fs::write(parent.join("budgets.toml"), &bytes);
+            }
+        }
+        let global = BudgetBook::path();
+        if let Some(p) = global.parent() {
+            let _ = std::fs::create_dir_all(p);
+        }
+        let _ = std::fs::write(global, bytes);
+    }
     Ok((ins, skip, manifest))
 }
 

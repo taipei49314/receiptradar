@@ -436,10 +436,33 @@ Tag: v0.1.0-cli.11
 | P2 | Device A04 matrix when Android available |
 | P3 | Optional cargo-deny.toml dual gate |
 
+## Cycle 29 — mobile FFI parity + budgets in backup (main axis #3)
+
+### Plan
+1. Backup/handoff pack optional `budgets.toml`; restore rehydrate (ledger dir + data dir)
+2. Dart `RradarApi` full surface: query/tags/budget/engines + capabilities
+3. Budget screen + ledger tag filter; `docs/frb-contract.md` generate checklist
+4. Docs ledger-schema / backup-format / ffi
+
+### Verify
+- `cargo test --workspace --locked` / clippy green (incl. `backup_includes_budgets_toml`)
+
+### Result
+- Mobile shell matches Rust product surface without Flutter SDK  
+- Multi-device budget soft-limits travel with encrypted backup file only  
+
+### Next seeds
+| Priority | Item |
+|----------|------|
+| P1 | FRB generate when Flutter present |
+| P2 | cargo-deny dual gate optional |
+| P3 | Device A04 when Android available |
+
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
 - Green tests before re-plan  
 - Non-goals: official sync, GPT wrapper  
+
 
 
 
