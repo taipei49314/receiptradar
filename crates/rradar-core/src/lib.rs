@@ -50,6 +50,7 @@ pub use ledger::{
 pub use money::{sum_same_currency, Iso4217, Money, MoneyError};
 pub use paths::{data_dir, default_db_path, ensure_data_dir, ensure_inbox_dir, inbox_dir};
 pub use pipeline::{process_bytes, process_path, utc_now_iso, ProcessError, ProcessOptions};
+pub use preprocess::{content_hash, preprocess, PreprocessConfig, Preprocessed};
 pub use report::{
     annual_markdown, annual_markdown_with_books, monthly_markdown, monthly_markdown_with_budgets,
 };

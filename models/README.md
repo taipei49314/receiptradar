@@ -95,6 +95,23 @@ Why `load-dynamic`? Prebuilt ORT tarballs for **windows-gnu** are not published 
 | `RRADAR_FETCH_ORT=1` | Shell script: also try to fetch ORT |
 | `ORT_VERSION` | ORT release tag (**default `1.22.0`** — must match ort 2.0.0-rc.10 / `1.22.x`) |
 
+## Preprocess (before RapidOCR)
+
+Pipeline always runs max-edge downscale when input is a real image:
+
+| Pass | Longest edge | When |
+|------|--------------|------|
+| 1 | **1280** | Default |
+| 2 | **1600** | overall confidence &lt; 0.45 after L1 extract |
+
+Never upscales small fixtures. Non-image payloads (`.txt`, mock bins) are untouched.
+
+```bash
+rradar ocr photo.jpg --engine onnx --max-edge 1280   # raw lines only
+rradar process photo.jpg --engine onnx --explain      # full draft + retry notes
+rradar bench fixtures/images --engine onnx --json     # A04 p50/p95
+```
+
 ## Desktop e2e smoke
 
 ```powershell

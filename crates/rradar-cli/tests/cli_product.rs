@@ -268,6 +268,36 @@ fn demo_closed_loop() {
 }
 
 #[test]
+fn bench_mock_text_fixtures() {
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/text");
+    assert!(fixtures.is_dir(), "fixtures/text missing");
+    let out = bin()
+        .args([
+            "bench",
+            fixtures.to_str().unwrap(),
+            "--engine",
+            "mock",
+            "--json",
+            "--no-warmup",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "bench: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("bench json");
+    assert!(v["success"].as_u64().unwrap_or(0) >= 1, "{v}");
+    assert!(
+        v["p50_ms"].as_u64().is_some() || v["success"].as_u64() == Some(0),
+        "{v}"
+    );
+    assert_eq!(v["engine"].as_str(), Some("mock"));
+}
+
+#[test]
 fn release_check_ok() {
     let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
     assert!(fixtures.is_dir(), "fixtures missing");

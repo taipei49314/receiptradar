@@ -546,6 +546,31 @@ Tag: v0.1.0-cli.11
 | P2 | ONNX desktop re-measure when weights present |
 | P3 | Device A04 when Android available |
 
+## Cycle 34 — real image preprocess + ONNX product path (main axis #1)
+
+### Plan
+1. Real preprocess: decode JPEG/PNG/WebP/GIF; max-edge **1280** downscale (never upscale)
+2. Low-confidence retry at **1600** when overall conf &lt; 0.45 after L1 extract
+3. CLI `rradar ocr` (raw lines) + `rradar bench` (A04 p50/p95, `force_ocr` skips sidecars)
+4. Re-measure ONNX warm path with local weights; update spike-ocr-size / models/README / cli.md
+
+### Verify
+- `cargo test --workspace --locked` / clippy `-D warnings` green
+- Local: `cargo build -p rradar-cli --features onnx --release`
+- `rradar process fixtures/images/receipt_en_total89.png --engine onnx` → total 89
+- `rradar bench …/receipt_en_total89.png --engine onnx --json` → warm p50 ≈ 115 ms
+
+### Result
+- Desktop true OCR path is productized end-to-end: preprocess → RapidOCR → extract → bench/ocr tools
+- CI remains mock-only (no weights in git); device A04 still pending
+
+### Next seeds
+| Priority | Item |
+|----------|------|
+| P1 | FRB when Flutter present |
+| P2 | Device A04 matrix when Android available |
+| P3 | Richer real-photo fixtures (replace 70 B placeholders) for ONNX accuracy matrix |
+
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
 - Green tests before re-plan  

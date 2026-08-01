@@ -107,15 +107,27 @@ rradar process any.txt --qr-file fixtures/qr/tw_einvoice_sample_01.payload.txt -
 | `mock` (default) | Deterministic / fixtures; CI-safe |
 | `onnx` | Real RapidOCR: build with `--features onnx`, fetch models + ORT (`tools/fetch-models.ps1 -FetchOrt`), `rradar models verify`, then `--engine onnx` |
 
+### Image preprocess (real photos)
+
+- Decode JPEG/PNG/WebP/GIF; downscale longest edge to **1280** (never upscale).
+- If overall confidence < **0.45** after L1 extract, **retry once at 1600**.
+- Text fixtures / mock OCR bins pass through (not images).
+- Debug OCR only: `rradar ocr photo.jpg --engine onnx --max-edge 1280`
+- Latency harness: `rradar bench fixtures/text --json` or `rradar bench fixtures/images --engine onnx --json`
+
 ```bash
 rradar models status
 rradar models verify   # requires weights matching models/manifest.sha256
+rradar engines --json
+rradar ocr fixtures/images/receipt_en_total89.png --engine auto
+rradar bench fixtures/text --engine mock --json
 ```
 
 ```powershell
 powershell -File tools/fetch-models.ps1 -FetchOrt   # ORT default 1.22.0
 powershell -File scripts/smoke-onnx.ps1              # full e2e
 cargo run -p rradar-cli --features onnx -- process fixtures/images/receipt_en_total89.png --engine onnx --explain
+cargo run -p rradar-cli --features onnx --release -- bench fixtures/images --engine onnx --json
 ```
 
 See `models/README.md` for layout, `ORT_DYLIB_PATH`, and zh-TW notes.
@@ -160,4 +172,6 @@ rradar serve                   # http://127.0.0.1:7432
 - [x] QR prefer path  
 - [x] `scripts/smoke-cli.ps1`  
 - [x] Real ONNX recognition path (`--features onnx` + models + ORT load-dynamic)  
+- [x] Image max-edge preprocess + low-confidence retry (1280 → 1600)  
+- [x] `ocr` raw line dump + `bench` A04 harness (p50/p95)  
 

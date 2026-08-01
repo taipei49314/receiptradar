@@ -14,6 +14,7 @@
 - Local HTTP API expanded for product demo automation (capabilities, paths, attach, process flags)
 
 ### Added
+- **Real image preprocess + ONNX product path (axis #1):** decode JPEG/PNG/WebP/GIF; max-edge 1280 downscale + low-conf retry at 1600; `rradar ocr` raw line dump; `rradar bench` A04 harness (`force_ocr`, p50/p95); desktop ONNX warm p50 ~115 ms recorded in spike-ocr-size.md
 - **CSV import (axis #2):** `transactions_from_csv` + `rradar import csv` (export header roundtrip, empty id → ULID, skip existing); FFI `import_csv_json`
 - **Supply-chain dual gate (axis #4):** root `deny.toml` + `cargo deny check` (pin 0.20.2); `scripts/check-supply-chain.ps1`/`.sh`; CI installs cargo-deny and runs check; CI `fixtures verify`
 - **Recordable fixture matrix (axis #5):** +6 TW text fixtures (家樂福/OK/高鐵/康是美/鼎泰豐/ibon), +3 mock_ocr, +1 image sidecar; `rradar fixtures list|verify`; `scripts/record-demo.ps1`; demo processes all sidecar images

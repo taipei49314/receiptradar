@@ -27,6 +27,14 @@ pub struct ProcessOptions {
     /// Optional raw TW e-invoice left QR string (offline; no image decode required).
     pub qr_payload: Option<String>,
     pub preprocess: PreprocessConfig,
+    /// When overall confidence is below this after the first OCR pass **and**
+    /// the image was decoded, retry once at [`PreprocessConfig::retry_higher`].
+    /// Set to `0.0` to disable. Default `0.45`.
+    pub low_confidence_retry: f32,
+    /// When true, `process_path` skips `.txt` body / `.ocr.txt` sidecars and always
+    /// runs the OCR engine on file bytes (A04 pixel bench / real-photo path).
+    /// Mock magic bins still expand as text (deterministic fixtures).
+    pub force_ocr: bool,
 }
 
 impl Default for ProcessOptions {
@@ -35,6 +43,8 @@ impl Default for ProcessOptions {
             default_currency: Iso4217::TWD,
             qr_payload: None,
             preprocess: PreprocessConfig::default(),
+            low_confidence_retry: 0.45,
+            force_ocr: false,
         }
     }
 }
@@ -54,12 +64,23 @@ pub fn process_path(
         Path::new(&s).to_path_buf()
     };
 
-    let text_override = if path
+    let is_txt = path
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.eq_ignore_ascii_case("txt"))
-        .unwrap_or(false)
-    {
+        .unwrap_or(false);
+
+    let text_override = if opts.force_ocr {
+        // Still honor mock magic so bin fixtures stay deterministic under force_ocr.
+        if let Some(payload) = strip_mock_ocr_magic(&bytes) {
+            Some(String::from_utf8_lossy(payload).into_owned())
+        } else if is_txt {
+            // Plain text has no pixels — keep body as override.
+            Some(String::from_utf8_lossy(&bytes).into_owned())
+        } else {
+            None
+        }
+    } else if is_txt {
         Some(String::from_utf8_lossy(&bytes).into_owned())
     } else if let Some(payload) = strip_mock_ocr_magic(&bytes) {
         // Accept LF or CRLF after magic so Windows autocrlf checkouts still work.
@@ -87,24 +108,8 @@ pub fn process_bytes(
     }
 
     let mut explain = ExplainTrace::new(engine.name(), "pending");
-    let pre = preprocess(
-        if image_or_payload.is_empty() {
-            b"empty"
-        } else {
-            image_or_payload
-        },
-        opts.preprocess,
-    );
-    explain.step(
-        "preprocess",
-        format!(
-            "max_edge={} sha256={}",
-            pre.max_edge,
-            &pre.content_hash_hex[..16.min(pre.content_hash_hex.len())]
-        ),
-    );
 
-    // --- QR prefer path ---
+    // --- QR prefer path (no image preprocess required) ---
     if let Some(ref qr) = opts.qr_payload {
         if let Ok(parsed) = parse_tw_einvoice_left_qr(qr) {
             explain.source_path = SourcePath::Qr.as_str().into();
@@ -145,6 +150,114 @@ pub fn process_bytes(
         }
     }
 
+    // First pass at configured max_edge (default 1280).
+    let mut draft = process_bytes_ocr_pass(
+        image_or_payload,
+        text_override,
+        engine,
+        categories,
+        &opts,
+        opts.preprocess,
+        &mut explain,
+        false,
+    )?;
+
+    // Low-confidence retry at higher max_edge when we ran pixel OCR (no text override).
+    let can_retry = text_override.is_none()
+        && opts.low_confidence_retry > 0.0
+        && draft.overall_confidence < opts.low_confidence_retry
+        && draft.source_path == SourcePath::Ocr
+        && opts.preprocess.max_edge < 1600;
+
+    if can_retry {
+        let higher = opts.preprocess.retry_higher();
+        explain.step(
+            "preprocess_retry",
+            format!(
+                "overall_conf={:.2} < {:.2}; retry max_edge {}",
+                draft.overall_confidence, opts.low_confidence_retry, higher.max_edge
+            ),
+        );
+        match process_bytes_ocr_pass(
+            image_or_payload,
+            None,
+            engine,
+            categories,
+            &opts,
+            higher,
+            &mut explain,
+            true,
+        ) {
+            Ok(retry_draft) if retry_draft.overall_confidence >= draft.overall_confidence => {
+                return Ok(retry_draft);
+            }
+            Ok(retry_draft) => {
+                explain.step(
+                    "preprocess_retry",
+                    format!(
+                        "retry conf={:.2} worse than first {:.2}; keeping first",
+                        retry_draft.overall_confidence, draft.overall_confidence
+                    ),
+                );
+            }
+            Err(e) => {
+                explain.step(
+                    "preprocess_retry",
+                    format!("retry failed ({e}); keeping first"),
+                );
+            }
+        }
+        // Surface retry notes on the kept first draft.
+        draft.explain = explain;
+    }
+
+    Ok(draft)
+}
+
+/// Single preprocess → OCR → L1 extract pass.
+#[allow(clippy::too_many_arguments)]
+fn process_bytes_ocr_pass(
+    image_or_payload: &[u8],
+    text_override: Option<&str>,
+    engine: &dyn OcrEngine,
+    categories: &CategoryEngine,
+    opts: &ProcessOptions,
+    pre_cfg: PreprocessConfig,
+    explain: &mut ExplainTrace,
+    is_retry: bool,
+) -> Result<ReceiptDraft, ProcessError> {
+    let pre = preprocess(
+        if image_or_payload.is_empty() {
+            b"empty"
+        } else {
+            image_or_payload
+        },
+        pre_cfg,
+    );
+    let dim = match (
+        pre.original_width,
+        pre.original_height,
+        pre.output_width,
+        pre.output_height,
+    ) {
+        (Some(ow), Some(oh), Some(nw), Some(nh)) => format!(" {ow}x{oh}->{nw}x{nh}"),
+        _ => String::new(),
+    };
+    explain.step(
+        if is_retry {
+            "preprocess_retry_pass"
+        } else {
+            "preprocess"
+        },
+        format!(
+            "max_edge={} decoded={} resized={}{dim} sha256={}",
+            pre.max_edge,
+            pre.decoded,
+            pre.resized,
+            &pre.content_hash_hex[..16.min(pre.content_hash_hex.len())]
+        ),
+    );
+
     // --- OCR / text path ---
     let blocks: Vec<TextBlock> = if let Some(text) = text_override {
         explain.step("ocr", "using text fixture / sidecar (no pixel OCR)");
@@ -183,11 +296,11 @@ pub fn process_bytes(
         if t.len() >= 37 && t.chars().take(10).all(|c| c.is_ascii_alphanumeric()) {
             if let Ok(parsed) = parse_tw_einvoice_left_qr(t) {
                 explain.step("qr", "detected QR-like line inside OCR/text");
-                let fields = extract_l1_fields(&blocks, opts.default_currency, &mut explain);
+                let fields = extract_l1_fields(&blocks, opts.default_currency, explain);
                 let merchant = fields
                     .merchant
                     .unwrap_or_else(|| Field::new("unknown".into(), 0.3, FieldSource::Rule));
-                let cat = categories.categorize(&merchant.value, &raw_text, &mut explain);
+                let cat = categories.categorize(&merchant.value, &raw_text, explain);
                 explain.source_path = SourcePath::Mixed.as_str().into();
                 return Ok(ReceiptDraft {
                     id: ReceiptDraft::new_id(),
@@ -201,14 +314,14 @@ pub fn process_bytes(
                     raw_text,
                     ocr_blocks: blocks,
                     overall_confidence: 0.92,
-                    explain,
+                    explain: explain.clone(),
                     source_path: SourcePath::Mixed,
                 });
             }
         }
     }
 
-    let fields = extract_l1_fields(&blocks, opts.default_currency, &mut explain);
+    let fields = extract_l1_fields(&blocks, opts.default_currency, explain);
     let merchant = fields
         .merchant
         .unwrap_or_else(|| Field::new("unknown".into(), 0.2, FieldSource::Rule));
@@ -218,7 +331,7 @@ pub fn process_bytes(
     let transacted_at = fields
         .transacted_at
         .unwrap_or_else(|| Field::new(now_iso()[..10].to_string(), 0.2, FieldSource::Rule));
-    let cat = categories.categorize(&merchant.value, &raw_text, &mut explain);
+    let cat = categories.categorize(&merchant.value, &raw_text, explain);
 
     let overall = (merchant.confidence + total.confidence + cat.confidence) / 3.0;
     explain.source_path = SourcePath::Ocr.as_str().into();
@@ -235,7 +348,7 @@ pub fn process_bytes(
         raw_text,
         ocr_blocks: blocks,
         overall_confidence: overall,
-        explain,
+        explain: explain.clone(),
         source_path: SourcePath::Ocr,
     })
 }

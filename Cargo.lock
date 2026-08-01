@@ -1468,6 +1468,7 @@ dependencies = [
  "chacha20poly1305",
  "hex",
  "hkdf",
+ "image",
  "rand 0.8.7",
  "regex",
  "rradar-ocr",

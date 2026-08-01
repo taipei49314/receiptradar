@@ -45,6 +45,8 @@ fn main() -> ExitCode {
         "demo" => cmd_demo(&args[1..]),
         "fixtures" => cmd_fixtures(&args[1..]),
         "process" | "add" => cmd_process(&args[1..]),
+        "ocr" => cmd_ocr(&args[1..]),
+        "bench" => cmd_bench(&args[1..]),
         "manual" | "entry" => cmd_manual(&args[1..]),
         "import" => cmd_import(&args[1..]),
         "list" | "ls" | "search" => cmd_list(&args[1..]),
@@ -1364,6 +1366,280 @@ fn currency_hint_for_path(path: &Path) -> Iso4217 {
     } else {
         Iso4217::TWD
     }
+}
+
+/// Raw OCR line dump (debug real photos before L1 extract).
+fn cmd_ocr(args: &[String]) -> Result<(), String> {
+    let mut paths: Vec<PathBuf> = Vec::new();
+    let mut engine = "auto".to_string();
+    let mut json = false;
+    let mut max_edge: u32 = 1280;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => json = true,
+            "--engine" => {
+                i += 1;
+                engine = args.get(i).ok_or("--engine needs value")?.clone();
+            }
+            "--max-edge" => {
+                i += 1;
+                let v = args.get(i).ok_or("--max-edge needs value")?;
+                max_edge = v.parse().map_err(|_| format!("bad --max-edge {v}"))?;
+            }
+            s if s.starts_with('-') => return Err(format!("unknown flag: {s}")),
+            s => paths.push(PathBuf::from(s)),
+        }
+        i += 1;
+    }
+    if paths.is_empty() {
+        return Err(
+            "usage: rradar ocr <image…> [--engine mock|onnx|auto] [--max-edge 1280] [--json]"
+                .into(),
+        );
+    }
+    if engine.eq_ignore_ascii_case("auto") {
+        eprintln!(
+            "engine auto → {} ({})",
+            rradar_ocr::resolve_auto_engine_name(),
+            rradar_ocr::probe_onnx_readiness(rradar_ocr::default_models_dir()).hint
+        );
+    }
+    let eng = engine_by_name(&engine).map_err(|e| e.to_string())?;
+    let mut all = Vec::new();
+    for path in &paths {
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let pre = rradar_core::preprocess::preprocess(
+            &bytes,
+            rradar_core::preprocess::PreprocessConfig { max_edge },
+        );
+        let t0 = std::time::Instant::now();
+        let lines = eng
+            .recognize(&pre.bytes)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let ms = t0.elapsed().as_millis();
+        if json {
+            all.push(serde_json::json!({
+                "path": path.display().to_string(),
+                "engine": eng.name(),
+                "ms": ms,
+                "decoded": pre.decoded,
+                "resized": pre.resized,
+                "max_edge": pre.max_edge,
+                "original": [pre.original_width, pre.original_height],
+                "output": [pre.output_width, pre.output_height],
+                "lines": lines.iter().map(|l| serde_json::json!({
+                    "text": l.text,
+                    "confidence": l.confidence,
+                })).collect::<Vec<_>>(),
+            }));
+        } else {
+            println!(
+                "=== {} | engine={} | {}ms | decoded={} resized={} max_edge={}",
+                path.display(),
+                eng.name(),
+                ms,
+                pre.decoded,
+                pre.resized,
+                pre.max_edge
+            );
+            if let (Some(ow), Some(oh), Some(nw), Some(nh)) = (
+                pre.original_width,
+                pre.original_height,
+                pre.output_width,
+                pre.output_height,
+            ) {
+                println!("  size {ow}x{oh} → {nw}x{nh}");
+            }
+            for (idx, l) in lines.iter().enumerate() {
+                println!("  [{idx:02}] conf={:.3}  {}", l.confidence, l.text);
+            }
+        }
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&all).unwrap_or_else(|_| "[]".into())
+        );
+    }
+    Ok(())
+}
+
+/// A04 latency / accuracy harness over a directory or file list (product path).
+fn cmd_bench(args: &[String]) -> Result<(), String> {
+    let mut root = PathBuf::from("fixtures/text");
+    let mut engine = "mock".to_string();
+    let mut json = false;
+    let mut warmup = true;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => json = true,
+            "--no-warmup" => warmup = false,
+            "--engine" => {
+                i += 1;
+                engine = args.get(i).ok_or("--engine needs value")?.clone();
+            }
+            s if s.starts_with('-') => return Err(format!("unknown flag: {s}")),
+            s => root = PathBuf::from(s),
+        }
+        i += 1;
+    }
+
+    let eng = engine_by_name(&engine).map_err(|e| e.to_string())?;
+    let cats = category_engine_with_packs();
+    let paths = collect_bench_inputs(&root);
+    if paths.is_empty() {
+        return Err(format!("no inputs under {}", root.display()));
+    }
+
+    // Force pixel OCR for image roots so .ocr.txt sidecars do not zero-out A04 timings.
+    let bench_opts = ProcessOptions {
+        force_ocr: true,
+        ..Default::default()
+    };
+
+    // Warm shared engine so first cold-load does not dominate p50 for ONNX.
+    if warmup {
+        if let Some(p) = paths.first() {
+            let _ = process_path(p, eng.as_ref(), &cats, bench_opts.clone());
+        }
+    }
+
+    let mut rows = Vec::new();
+    let mut times = Vec::new();
+    for path in &paths {
+        let t0 = std::time::Instant::now();
+        let res = process_path(path, eng.as_ref(), &cats, bench_opts.clone());
+        let ms = t0.elapsed().as_millis();
+        match res {
+            Ok(d) => {
+                times.push(ms);
+                rows.push(serde_json::json!({
+                    "path": path.display().to_string(),
+                    "engine": eng.name(),
+                    "ok": true,
+                    "ms": ms,
+                    "total_minor": d.total.value.amount_minor,
+                    "currency": d.total.value.currency.to_string(),
+                    "merchant": d.merchant.value,
+                    "overall_confidence": d.overall_confidence,
+                    "source_path": format!("{:?}", d.source_path),
+                    "error": null,
+                }));
+            }
+            Err(e) => {
+                rows.push(serde_json::json!({
+                    "path": path.display().to_string(),
+                    "engine": eng.name(),
+                    "ok": false,
+                    "ms": ms,
+                    "total_minor": null,
+                    "currency": null,
+                    "merchant": null,
+                    "overall_confidence": null,
+                    "source_path": null,
+                    "error": e.to_string(),
+                }));
+            }
+        }
+    }
+    times.sort_unstable();
+    let success = rows
+        .iter()
+        .filter(|r| r["ok"].as_bool() == Some(true))
+        .count();
+    let fail = rows.len() - success;
+    let p50 = percentile_ms(&times, 50);
+    let p95 = percentile_ms(&times, 95);
+    let report = serde_json::json!({
+        "note": "A04 harness via rradar bench — paste into docs/spike-ocr-size.md",
+        "engine": eng.name(),
+        "engine_arg": engine,
+        "root": root.display().to_string(),
+        "warmup": warmup,
+        "success": success,
+        "fail": fail,
+        "p50_ms": p50,
+        "p95_ms": p95,
+        "rows": rows,
+    });
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".into())
+        );
+    } else {
+        println!(
+            "engine={} arg={} success={} fail={} p50_ms={:?} p95_ms={:?} warmup={}",
+            eng.name(),
+            engine,
+            success,
+            fail,
+            p50,
+            p95,
+            warmup
+        );
+        for r in &rows {
+            println!(
+                "  {:>5}ms  ok={}  conf={}  {}  {:?}",
+                r["ms"].as_u64().unwrap_or(0),
+                r["ok"],
+                r["overall_confidence"],
+                r["path"].as_str().unwrap_or("?"),
+                r["total_minor"]
+            );
+        }
+    }
+    if fail > 0 && engine.eq_ignore_ascii_case("onnx") {
+        eprintln!(
+            "note: onnx fails may be blank placeholder images (sidecar-only fixtures) \
+             or missing ORT/weights — see models/README.md"
+        );
+    }
+    Ok(())
+}
+
+fn collect_bench_inputs(root: &Path) -> Vec<PathBuf> {
+    if root.is_file() {
+        return vec![root.to_path_buf()];
+    }
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(root) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if !p.is_file() {
+                continue;
+            }
+            // Skip OCR sidecars and non-input noise.
+            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if name.ends_with(".ocr.txt") || name.ends_with(".expected.json") {
+                continue;
+            }
+            let ext = p
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if matches!(
+                ext.as_str(),
+                "txt" | "png" | "jpg" | "jpeg" | "webp" | "gif" | "bin" | "mock"
+            ) || name.contains("mock")
+            {
+                out.push(p);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+fn percentile_ms(sorted: &[u128], p: u8) -> Option<u128> {
+    if sorted.is_empty() {
+        return None;
+    }
+    let idx = ((p as usize) * (sorted.len() - 1)) / 100;
+    Some(sorted[idx])
 }
 
 fn cmd_process(args: &[String]) -> Result<(), String> {
@@ -3779,6 +4055,7 @@ fn print_topic_help(topic: &str) -> Result<(), String> {
         "process" | "add" => "\
 process <files…> [options]
   Parse receipt text/image (mock OCR by default). Multiple files = batch.
+  Images: decode + downscale longest edge to 1280 (retry 1600 on low conf).
   --confirm, -c     write to ledger (default db)
   --attach          with --confirm, copy source into {db_dir}/attachments/
   --tags a,b,c      with --confirm, set free-form tags (schema v3)
@@ -3790,6 +4067,15 @@ process <files…> [options]
   --merchant --amount --category --date --notes
   --force           override hard dedupe
   --db PATH -p PASS",
+        "ocr" => "\
+ocr <image…> [--engine mock|onnx|auto] [--max-edge 1280] [--json]
+  Dump raw OCR lines (preprocess + engine) without L1 extract / ledger.
+  Useful to debug real photos before process.",
+        "bench" => "\
+bench [DIR|FILE] [--engine mock|onnx|auto] [--json] [--no-warmup]
+  A04 latency harness (shared engine; default fixtures/text).
+  Prints p50/p95 ms + per-file total. Paste --json into docs/spike-ocr-size.md.
+  ONNX: cargo build -p rradar-cli --features onnx --release",
         "manual" | "entry" => "\
 manual --merchant NAME --amount MAJOR [--currency TWD] [--category ID] [--date YYYY-MM-DD] [--notes N]
   Insert a transaction without OCR. Alias: entry",
@@ -3925,6 +4211,8 @@ Commands:
   fixtures             List/verify demo fixture matrix
   path                 Print default home & db paths
   process <files…>     Parse receipt(s) (alias: add); batch OK
+  ocr <image…>         Raw OCR line dump (debug photos)
+  bench [dir]          A04 latency harness (p50/p95; --engine onnx)
   manual               Manual entry without OCR (alias: entry)
   import json|csv      Import JSON array or CSV (export format)
   list                 List/search transactions (alias: ls, search)

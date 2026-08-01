@@ -126,7 +126,10 @@ fn main() {
     }
 
     if engine == "onnx" {
-        eprintln!("note: onnx backend is stub until PR-A05 model pin");
+        eprintln!(
+            "note: prefer `rradar bench DIR --engine onnx --json` (shared warmup); \
+             needs --features onnx + models (see models/README.md)"
+        );
     }
 }
 
