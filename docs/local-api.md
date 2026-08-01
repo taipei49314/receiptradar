@@ -19,8 +19,10 @@ Non-loopback binds are **rejected** (CLI + server).
 | GET | `/version` | product/version/schema JSON (`local_only: true`) |
 | GET | `/capabilities` | feature flags (no cloud, attachment store, …) |
 | GET | `/paths` | db / attachments / inbox paths |
-| GET | `/transactions?limit=&currency=&q=` | recent transactions JSON (filter optional) |
+| GET | `/transactions?limit=&currency=&q=&tag=&category=&ym=&from=&to=&min_minor=&max_minor=&has_attachment=` | filtered transactions JSON |
 | GET | `/transaction?id=` | one transaction JSON |
+| GET | `/tags` | distinct free-form tags JSON array |
+| GET | `/budget?y=&m=` | local soft budget book + monthly status JSON |
 | GET | `/stats` | per-currency totals JSON |
 | GET | `/report?y=2024&m=5` | monthly markdown report |
 | GET | `/models` | ONNX pin status JSON (no weights uploaded) |

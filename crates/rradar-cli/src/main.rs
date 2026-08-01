@@ -497,8 +497,15 @@ fn cmd_doctor(_args: &[String]) -> Result<(), String> {
         ready.hint
     );
     println!("  privacy:  local-first; no network required for core path");
+    let book = BudgetBook::load();
+    println!(
+        "  budgets:  {} ({} line(s)) — rradar budget status",
+        BudgetBook::path().display(),
+        book.lines.len()
+    );
     println!("  engines:  rradar engines [--json]");
     println!("  demo:     rradar demo   # isolated closed-loop from fixtures/");
+    println!("  showcase: docs/demo-showcase.md");
     Ok(())
 }
 
@@ -2791,12 +2798,21 @@ fn cmd_handoff(args: &[String]) -> Result<(), String> {
 
 fn cmd_export(args: &[String]) -> Result<(), String> {
     if args.is_empty() {
-        return Err("usage: rradar export <csv|json> [-o file] [--year Y --month M]".into());
+        return Err(
+            "usage: rradar export <csv|json> [-o file] [--tag T] [--category C] [--year Y --month M]"
+                .into(),
+        );
     }
     let kind = args[0].as_str();
     let mut out: Option<PathBuf> = None;
     let mut year: Option<i32> = None;
     let mut month: Option<u32> = None;
+    let mut tag: Option<String> = None;
+    let mut category: Option<String> = None;
+    let mut currency: Option<String> = None;
+    let mut query: Option<String> = None;
+    let mut from: Option<String> = None;
+    let mut to: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -2822,15 +2838,61 @@ fn cmd_export(args: &[String]) -> Result<(), String> {
                         .map_err(|_| "bad month")?,
                 );
             }
+            "--tag" => {
+                i += 1;
+                tag = Some(args.get(i).ok_or("needs tag")?.clone());
+            }
+            "--category" => {
+                i += 1;
+                category = Some(args.get(i).ok_or("needs category")?.clone());
+            }
+            "--currency" => {
+                i += 1;
+                currency = Some(args.get(i).ok_or("needs currency")?.clone());
+            }
+            "--query" | "-q" => {
+                i += 1;
+                query = Some(args.get(i).ok_or("needs query")?.clone());
+            }
+            "--from" => {
+                i += 1;
+                from = Some(args.get(i).ok_or("needs date")?.clone());
+            }
+            "--to" => {
+                i += 1;
+                to = Some(args.get(i).ok_or("needs date")?.clone());
+            }
             _ => {}
         }
         i += 1;
     }
     let flags = extract_db_from_all(args)?;
     let (ledger, tmp) = open_db(&flags)?;
-    let rows = if let (Some(y), Some(m)) = (year, month) {
+    let filtered = tag.is_some()
+        || category.is_some()
+        || currency.is_some()
+        || query.is_some()
+        || from.is_some()
+        || to.is_some()
+        || year.is_some()
+        || month.is_some();
+    let rows = if filtered {
         ledger
-            .list_by_month(y, m, 100_000)
+            .query_transactions(&TxFilter {
+                limit: 100_000,
+                offset: 0,
+                currency,
+                query,
+                tag,
+                category,
+                year_month: match (year, month) {
+                    (Some(y), Some(m)) => Some(format!("{y:04}-{m:02}")),
+                    _ => None,
+                },
+                from,
+                to,
+                ..Default::default()
+            })
             .map_err(|e| e.to_string())?
     } else {
         ledger.export_all().map_err(|e| e.to_string())?

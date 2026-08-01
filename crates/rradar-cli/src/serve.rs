@@ -4,9 +4,9 @@
 //! machine-local integrations. Multi-device still = encrypted backup/handoff files.
 
 use rradar_core::{
-    attachments_root_for_db, category_engine_with_packs, inbox_dir, monthly_markdown,
-    normalize_tags, open_ledger_auto, process_path, store_attachment, Iso4217, ProcessOptions,
-    TxUpdate, LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
+    attachments_root_for_db, budget_status_month, category_engine_with_packs, inbox_dir,
+    monthly_markdown, normalize_tags, open_ledger_auto, process_path, store_attachment, BudgetBook,
+    Iso4217, ProcessOptions, TxFilter, TxUpdate, LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
 };
 use rradar_ocr::engine_by_name;
 use std::io::{Read, Write};
@@ -73,7 +73,7 @@ fn print_banner(bind: &str, db: &Path) {
     println!("serve | listening on {bind} (loopback only; no cloud)");
     println!("serve | db={}", db.display());
     println!(
-        "serve | GET /health /version /capabilities /paths /transactions /transaction?id= /stats /report?y=&m= /models"
+        "serve | GET /health /version /capabilities /paths /transactions /transaction?id= /tags /budget /stats /report?y=&m= /models"
     );
     println!(
         "serve | POST /process  JSON {{\"path\":\"...\",\"confirm\":true,\"attach\":true,\"tags\":\"demo\"}}"
@@ -171,12 +171,21 @@ pub fn smoke_local_api(
         && (proc.body.contains("\"inserted\":true") || proc.body.contains("inserted"));
     report.attachment_set = proc.body.contains("attachments/") || proc.body.contains("attachment");
 
-    let txs = http_get(&addr, "/transactions")?;
+    let txs = http_get(&addr, "/transactions?tag=demo")?;
     if status_ok(&txs.status) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txs.body) {
             report.transactions_n = v.as_array().map(|a| a.len()).unwrap_or(0);
         }
     }
+
+    let tags = http_get(&addr, "/tags")?;
+    if !status_ok(&tags.status) || !tags.body.contains("demo") {
+        return Err(format!(
+            "api-smoke: /tags missing demo: {}",
+            tags.body.chars().take(200).collect::<String>()
+        ));
+    }
+    let _budget = http_get(&addr, "/budget?y=2024&m=5")?;
 
     let stats = http_get(&addr, "/stats")?;
     report.stats_ok = status_ok(&stats.status) && !stats.body.is_empty();
@@ -332,7 +341,9 @@ fn handle(mut stream: TcpStream, st: &State) -> Result<(), String> {
                 "attachment_store": true,
                 "backup_includes_attachments": true,
                 "capture_oneshot": true,
-                "engines": ["mock", "onnx"],
+                "tag_filter": true,
+                "local_budgets": true,
+                "engines": ["mock", "onnx", "auto"],
                 "notes": "local-first; multi-device via backup/handoff file only",
             })
             .to_string(),
@@ -344,6 +355,7 @@ fn handle(mut stream: TcpStream, st: &State) -> Result<(), String> {
                 "db": st.db.display().to_string(),
                 "attachments": attachments_root_for_db(&st.db).display().to_string(),
                 "inbox": inbox_dir().display().to_string(),
+                "budgets": BudgetBook::path().display().to_string(),
                 "local_only": true,
             })
             .to_string(),
@@ -354,15 +366,72 @@ fn handle(mut stream: TcpStream, st: &State) -> Result<(), String> {
             let limit = query_param(query, "limit")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(200usize);
-            let currency = query_param(query, "currency");
-            let q = query_param(query, "q").or_else(|| query_param(query, "query"));
+            let filter = TxFilter {
+                limit,
+                offset: 0,
+                currency: query_param(query, "currency").map(|s| s.to_string()),
+                query: query_param(query, "q")
+                    .or_else(|| query_param(query, "query"))
+                    .map(|s| s.to_string()),
+                tag: query_param(query, "tag").map(|s| s.to_string()),
+                category: query_param(query, "category").map(|s| s.to_string()),
+                year_month: query_param(query, "ym").map(|s| s.to_string()),
+                from: query_param(query, "from").map(|s| s.to_string()),
+                to: query_param(query, "to").map(|s| s.to_string()),
+                min_minor: query_param(query, "min_minor").and_then(|s| s.parse().ok()),
+                max_minor: query_param(query, "max_minor").and_then(|s| s.parse().ok()),
+                has_attachment: match query_param(query, "has_attachment") {
+                    Some("1") | Some("true") | Some("yes") => Some(true),
+                    Some("0") | Some("false") | Some("no") => Some(false),
+                    _ => None,
+                },
+            };
             let rows = ledger
-                .list_filtered(limit, 0, currency, q)
+                .query_transactions(&filter)
                 .map_err(|e| e.to_string())?;
             if let Some(t) = tmp {
                 let _ = std::fs::remove_file(t);
             }
             serde_json::to_string(&rows).map_err(|e| e.to_string())
+        }),
+        ("GET", "/tags") => json_result(|| {
+            let (ledger, tmp) =
+                open_ledger_auto(&st.db, st.passphrase.as_deref()).map_err(|e| e.to_string())?;
+            let tags = ledger.list_tags().map_err(|e| e.to_string())?;
+            if let Some(t) = tmp {
+                let _ = std::fs::remove_file(t);
+            }
+            serde_json::to_string(&tags).map_err(|e| e.to_string())
+        }),
+        ("GET", "/budget") => json_result(|| {
+            let book = BudgetBook::load();
+            let y = query_param(query, "y")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or_else(|| {
+                    let iso = rradar_core::utc_now_iso();
+                    iso.get(0..4).and_then(|s| s.parse().ok()).unwrap_or(2026)
+                });
+            let m = query_param(query, "m")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or_else(|| {
+                    let iso = rradar_core::utc_now_iso();
+                    iso.get(5..7).and_then(|s| s.parse().ok()).unwrap_or(1)
+                });
+            let (ledger, tmp) =
+                open_ledger_auto(&st.db, st.passphrase.as_deref()).map_err(|e| e.to_string())?;
+            let status =
+                budget_status_month(&ledger, &book, y, m).map_err(|e| e.to_string())?;
+            if let Some(t) = tmp {
+                let _ = std::fs::remove_file(t);
+            }
+            Ok(serde_json::json!({
+                "year": y,
+                "month": m,
+                "book": book,
+                "status": status,
+                "local_only": true,
+            })
+            .to_string())
         }),
         ("GET", "/transaction") => json_result(|| {
             let id = query_param(query, "id").ok_or("missing id query param")?;

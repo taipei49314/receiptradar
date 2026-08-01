@@ -36,7 +36,8 @@ rradar demo --quiet          # CI-friendly
 powershell -File scripts/demo.ps1
 ```
 
-Covers: text + mock_ocr + TW QR → **attach/tags** → list/stats/top → export → backup → monthly report → model pins → **local API smoke**.  
+Covers: text + mock_ocr + TW QR → **attach/tags** → tag filter + soft budget → list/stats/top → export → backup → monthly report → model pins → **local API smoke**.  
+Showcase script: [demo-showcase.md](./demo-showcase.md).  
 Next steps: `inbox`/`watch --attach`, `serve` / `api-smoke` ([local-api.md](./local-api.md)).
 
 ## Daily workflow

@@ -13,6 +13,7 @@
 - Local HTTP API expanded for product demo automation (capabilities, paths, attach, process flags)
 
 ### Added
+- **Demo showcase + product search closed-loop (axis #5):** `docs/demo-showcase.md`; local API `/tags` `/budget` + rich `/transactions` filters; filtered `export`; doctor budgets line; api-smoke hits tag filter
 - **Tag filter + local budgets (axis #2):** `TxFilter` / `list --tag|--category|--from|--to|--min-amount|--max-amount|--has-attachment`; `rradar tags`; `rradar budget set|status|list|clear` (`budgets.toml`); report Budgets section; FFI `query_transactions_json` / `budget_status_json`
 - **Release/CI productization:** `rradar release-check` (alias `self-check`); `scripts/verify-install.ps1`/`.sh`; release archives ship CHANGELOG/cli/privacy/THIRD_PARTY_NOTICES; CI release-check + engines; richer VERSION metadata
 - **ONNX readiness productization:** `probe_onnx_readiness`, `rradar engines [--json]`, `process --engine auto`, version/doctor readiness lines; FFI `engines_json`; mock bench p50/p95 recorded in spike-ocr-size.md

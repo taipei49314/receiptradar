@@ -391,6 +391,28 @@ Tag: v0.1.0-cli.11
 | P2 | Supply-chain / license CI gate (axis #4) |
 | P3 | FRB when Flutter present |
 
+## Cycle 27 — demo showcase + product search closed-loop (main axis #5)
+
+### Plan
+1. `docs/demo-showcase.md` + README/cli product path
+2. Local API: `/tags`, `/budget`, richer `/transactions` filters
+3. Filtered `export`; doctor budgets; api-smoke tag path
+4. Demo already surfaces tags + soft budget (cycle 26)
+
+### Verify
+- `cargo test --workspace --locked` / clippy green
+- api-smoke includes `/tags` + `/transactions?tag=demo`
+
+### Result
+- Recordable narrative + HTTP product surface for tag search / budgets
+
+### Next seeds
+| Priority | Item |
+|----------|------|
+| P1 | Supply-chain / license CI gate (axis #4) |
+| P2 | FRB when Flutter present |
+| P3 | Device A04 matrix when Android available |
+
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
 - Green tests before re-plan  

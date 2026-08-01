@@ -31,10 +31,12 @@ rradar demo
 Daily use after `rradar init`:
 
 ```bash
-rradar process fixtures/text/familymart_89.txt --confirm --explain
-rradar list
+rradar process fixtures/text/familymart_89.txt --confirm --explain --tags work,lunch
+rradar list --tag work
+rradar budget set --currency TWD --monthly 30000
+rradar budget status
 rradar stats
-rradar export csv -o out.csv
+rradar export csv --tag work -o work.csv
 rradar backup create -p 'choose-a-passphrase'
 ```
 
@@ -53,21 +55,23 @@ rradar help
 | Parse receipt | `process` / `add` |
 | Confirm to ledger | `process … --confirm` |
 | Override fields | `--merchant --amount --category --date --notes` |
-| Browse | `list`, `show` |
+| Browse / search | `list` (`--tag` `--query` `--min-amount` …), `tags`, `show` |
+| Soft monthly budgets | `budget set\|status\|list` (local `budgets.toml`) |
 | Fix / remove | `edit`, `delete --yes` |
 | Monthly totals (per currency) | `stats` |
-| Export | `export csv\|json` |
+| Export (optional filters) | `export csv\|json` (`--tag` `--category` …) |
 | Encrypted backup | `backup create\|restore\|info\|verify` (+ `--merge`) |
 | Import merge | `import json` / `import backup` |
 | Schema migrate | `migrate` (local SQLite; no cloud) |
 | At-rest seal | `seal` / `unseal` |
 | TW e-invoice QR | `--qr` / `--qr-file` |
-| Monthly report | `report` |
+| Monthly report | `report` (+ Budgets section) |
 | Drop folder watch | `inbox` + `watch [--attach]` |
 | Local HTTP API | `serve` / `api-smoke` (127.0.0.1 only) |
 | Attach receipt file | `attach` / `process --attach` |
 
-**Never** sums different currencies together. Local API: [docs/local-api.md](./docs/local-api.md).
+**Never** sums different currencies together. Local API: [docs/local-api.md](./docs/local-api.md).  
+Recordable narrative: [docs/demo-showcase.md](./docs/demo-showcase.md).
 
 ## Privacy
 
