@@ -58,6 +58,11 @@ pub fn default_ledger_path() -> String {
     default_db_path().display().to_string()
 }
 
+/// OCR engines catalog + ONNX readiness (same as `rradar engines --json`).
+pub fn engines_json() -> String {
+    rradar_ocr::engines_catalog_json()
+}
+
 /// Compact capability JSON for mobile about screens.
 pub fn capabilities_json() -> String {
     #[derive(Serialize)]
@@ -65,7 +70,7 @@ pub fn capabilities_json() -> String {
         product_id: &'static str,
         version: &'static str,
         ledger_schema: u32,
-        engines: [&'static str; 2],
+        engines: [&'static str; 3],
         cloud_sync: bool,
         official_relay: bool,
         multi_device_handoff: bool,
@@ -75,13 +80,14 @@ pub fn capabilities_json() -> String {
         attachment_store: bool,
         backup_includes_attachments: bool,
         capture_oneshot: bool,
+        engine_auto: bool,
         notes: &'static str,
     }
     serde_json::to_string(&Caps {
         product_id: PRODUCT_ID,
         version: VERSION,
         ledger_schema: LEDGER_SCHEMA_VERSION,
-        engines: ["mock", "onnx"],
+        engines: ["mock", "onnx", "auto"],
         cloud_sync: false,
         official_relay: false,
         multi_device_handoff: true,
@@ -91,6 +97,7 @@ pub fn capabilities_json() -> String {
         attachment_store: true,
         backup_includes_attachments: true,
         capture_oneshot: true,
+        engine_auto: true,
         notes: "local-first; multi-device via backup/handoff file only",
     })
     .unwrap_or_else(|_| "{}".into())
@@ -878,7 +885,10 @@ mod tests {
         assert!(caps.contains("\"attachment_store\":true"));
         assert!(caps.contains("\"backup_includes_attachments\":true"));
         assert!(caps.contains("\"capture_oneshot\":true"));
+        assert!(caps.contains("\"engine_auto\":true"));
         assert!(!categories_json().is_empty());
+        let eng = engines_json();
+        assert!(eng.contains("auto_resolves_to"));
         let _ = list_rule_packs_json();
         let _ = models_pins_json(String::new()).unwrap_or_default();
     }

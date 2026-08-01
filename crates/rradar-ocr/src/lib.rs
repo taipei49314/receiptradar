@@ -15,7 +15,8 @@ pub use manifest::{
     ModelPin, PinCheck,
 };
 pub use onnx::{
-    auto_ort_dylib, ensure_ort_dylib_env, onnx_feature_enabled, OnnxConfig, OnnxOcrEngine,
+    auto_ort_dylib, ensure_ort_dylib_env, onnx_feature_enabled, probe_onnx_readiness, OnnxConfig,
+    OnnxOcrEngine, OnnxReadiness,
 };
 
 /// One recognized text line.
@@ -117,9 +118,19 @@ impl OcrEngine for MockOcrEngine {
 ///
 /// - `mock` — always available
 /// - `onnx` — loads `RRADAR_MODELS_DIR` or `./models` via [`OnnxOcrEngine`]
+/// - `auto` — onnx when [`probe_onnx_readiness`] says ready, else mock
 pub fn engine_by_name(name: &str) -> Result<Box<dyn OcrEngine>, OcrError> {
     match name.to_ascii_lowercase().as_str() {
         "mock" | "" => Ok(Box::new(MockOcrEngine)),
+        "auto" => {
+            let dir = default_models_dir();
+            let ready = probe_onnx_readiness(&dir);
+            if ready.ready_for_inference {
+                engine_by_name("onnx")
+            } else {
+                Ok(Box::new(MockOcrEngine))
+            }
+        }
         "onnx" | "onnx-rapidocr" => {
             let dir = std::env::var("RRADAR_MODELS_DIR").unwrap_or_else(|_| "models".into());
             ensure_ort_dylib_env(Path::new(&dir));
@@ -137,8 +148,55 @@ pub fn engine_by_name(name: &str) -> Result<Box<dyn OcrEngine>, OcrError> {
                 Err(_) => Ok(Box::new(OnnxOcrEngine::unvalidated(cfg))),
             }
         }
-        other => Err(OcrError::Backend(format!("unknown engine: {other}"))),
+        other => Err(OcrError::Backend(format!(
+            "unknown engine: {other} (try mock|onnx|auto)"
+        ))),
     }
+}
+
+/// Which concrete engine `auto` would pick (does not construct heavy runtimes).
+pub fn resolve_auto_engine_name() -> &'static str {
+    let ready = probe_onnx_readiness(default_models_dir());
+    if ready.ready_for_inference {
+        "onnx"
+    } else {
+        "mock"
+    }
+}
+
+/// Compact engines catalog for CLI / FFI / doctor.
+pub fn engines_catalog_json() -> String {
+    let ready = probe_onnx_readiness(default_models_dir());
+    let auto = resolve_auto_engine_name();
+    serde_json::json!({
+        "default": "mock",
+        "auto_resolves_to": auto,
+        "engines": [
+            {
+                "name": "mock",
+                "available": true,
+                "notes": "fixtures, CI, deterministic",
+            },
+            {
+                "name": "onnx",
+                "available": ready.ready_for_inference,
+                "feature": ready.feature_enabled,
+                "models_present": ready.models_present,
+                "pins_ok": ready.pins_ok,
+                "ort_found": ready.ort_found,
+                "notes": ready.hint,
+            },
+            {
+                "name": "auto",
+                "available": true,
+                "resolves_to": auto,
+                "notes": "uses onnx when feature+models ready, else mock",
+            }
+        ],
+        "onnx_readiness": ready,
+        "policy": "local-first; no cloud OCR",
+    })
+    .to_string()
 }
 
 #[cfg(test)]
@@ -185,5 +243,30 @@ mod tests {
             err,
             OcrError::OnnxUnavailable | OcrError::OnnxUnavailableWithHint(_) | OcrError::Backend(_)
         ));
+    }
+
+    #[test]
+    fn auto_falls_back_to_mock_without_ready_onnx() {
+        // Without models (CI/dev default), auto must not fail — it picks mock.
+        let eng = engine_by_name("auto").unwrap();
+        let ready = probe_onnx_readiness(default_models_dir());
+        if ready.ready_for_inference {
+            assert_eq!(eng.name(), "onnx-rapidocr");
+        } else {
+            assert_eq!(eng.name(), "mock");
+            assert_eq!(resolve_auto_engine_name(), "mock");
+        }
+        let lines = eng.recognize(b"fake").unwrap();
+        assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn engines_catalog_mentions_auto_and_policy() {
+        let j = engines_catalog_json();
+        assert!(j.contains("auto_resolves_to"));
+        assert!(j.contains("onnx_readiness"));
+        assert!(j.contains("no cloud"));
+        let ready = probe_onnx_readiness(default_models_dir());
+        assert_eq!(ready.feature_enabled, onnx_feature_enabled());
     }
 }

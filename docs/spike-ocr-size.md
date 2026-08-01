@@ -1,6 +1,7 @@
 # OCR + size spike report (PR-A04)
 
-**Status:** harness ready (`tools/bench-ocr`); **device measurements pending**.
+**Status:** harness ready (`tools/bench-ocr`); **device measurements pending**.  
+**Desktop A05 pins:** frozen. **CLI readiness:** `rradar engines` / `process --engine auto`.
 
 ## Binding color gate (record outcome here)
 
@@ -11,7 +12,7 @@
 | **Orange** | OCR weak, QR strong | Narrow matrix; manual-entry prominence; optional ML Kit Track B |
 | **Red** | Neither path viable | Public launch = T0 CLI only; slip T1 mobile |
 
-**Outcome (fill):** _not run yet — mock-only baseline below._
+**Outcome (desktop):** mock baseline measured (below). **ONNX desktop smoke** path scripted (`scripts/smoke-onnx.ps1`) when weights present. **Device A04 still pending.**
 
 ## Mock baseline (desktop, this repo)
 
@@ -19,31 +20,38 @@
 cargo run -p bench-ocr -- fixtures/text --json
 ```
 
-Record date / machine / rustc:
-
 | Field | Value |
 |-------|-------|
-| Date | 2026-07-31 |
+| Date | 2026-08-01 |
 | CPU | Windows x86_64 (dev) |
-| rustc | 1.97.1 |
+| rustc | 1.97.1 (stable-gnu) |
 | Engine | mock |
-| p50 / p95 | see `bench-ocr` |
-| Notes | Not a substitute for on-device CJK ONNX |
+| Fixtures | 11 text receipts |
+| success / fail | 11 / 0 |
+| **p50_ms** | **5** |
+| **p95_ms** | **6** |
+| Notes | Pipeline L1 extract only — not a substitute for on-device CJK ONNX |
+
+Re-run and paste JSON into release notes if numbers drift.
 
 ## Desktop ONNX smoke (optional, local)
 
 ```powershell
 powershell -File scripts/smoke-onnx.ps1
+# or check readiness without weights:
+rradar engines --json
+rradar process fixtures/images/receipt_en_total89.png --engine auto --explain
 ```
 
 | Field | Value |
 |-------|-------|
-| Date | 2026-07-31 |
+| Date | 2026-07-31 (first green local run) |
 | Engine | onnx-rapidocr (`--features onnx`) |
 | ORT | 1.22.0 load-dynamic |
 | Input | `fixtures/images/receipt_en_total89.png` (synthetic) |
 | Result | total exact 89 TWD; merchant FAMILYMART* |
 | Notes | Pin pack in `models/manifest.sha256`; not in default CI |
+| Readiness API | `probe_onnx_readiness` / `rradar engines` (feature + models + pins + ORT) |
 
 ## Device matrix (to fill)
 
@@ -69,3 +77,5 @@ Require ≥2 packs on zh-TW-labeled subset before **device** A04 Green; desktop 
 - [ ] Color gate recorded (device)
 - [x] A05 desktop model name + hash frozen in `models/README.md` / `manifest.sha256`
 - [x] Marketing latency remains “seconds, on-device” until measured
+- [x] Desktop mock p50/p95 recorded (2026-08-01)
+- [x] `process --engine auto` + readiness catalog shipped

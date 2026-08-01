@@ -50,6 +50,21 @@ cargo build -p rradar-cli --features onnx --release
 
 Without models or without `--features onnx`, `--engine onnx` fails with a **clear multi-line hint** (not a panic).
 
+### Engine selection
+
+| Flag | Behavior |
+|------|----------|
+| `--engine mock` | Default; fixtures/CI |
+| `--engine onnx` | Real RapidOCR when feature + weights ready |
+| `--engine auto` | ONNX if `ready_for_inference`, else mock |
+
+```bash
+rradar engines            # human table
+rradar engines --json     # readiness + catalog
+rradar version --long     # onnx_ready + auto_engine
+rradar doctor             # same probe lines
+```
+
 ## Layout after fetch
 
 | File | Role |

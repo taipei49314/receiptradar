@@ -37,6 +37,7 @@ fn main() -> ExitCode {
         "init" => cmd_init(&args[1..]),
         "config" => cmd_config(&args[1..]),
         "doctor" => cmd_doctor(&args[1..]),
+        "engines" => cmd_engines(&args[1..]),
         "demo" => cmd_demo(&args[1..]),
         "process" | "add" => cmd_process(&args[1..]),
         "manual" | "entry" => cmd_manual(&args[1..]),
@@ -93,12 +94,23 @@ fn cmd_version(args: &[String]) -> Result<(), String> {
         .iter()
         .any(|a| a == "--long" || a == "-l" || a == "--verbose");
     let json = args.iter().any(|a| a == "--json");
+    let models = rradar_ocr::default_models_dir();
+    let ready = rradar_ocr::probe_onnx_readiness(&models);
     if json {
-        let onnx = rradar_ocr::onnx_feature_enabled();
         println!(
-            "{{\n  \"product_id\": \"{PRODUCT_ID}\",\n  \"version\": \"{VERSION}\",\n  \"ledger_schema\": {LEDGER_SCHEMA_VERSION},\n  \"onnx_feature\": {onnx},\n  \"os\": \"{}\",\n  \"arch\": \"{}\"\n}}",
-            env::consts::OS,
-            env::consts::ARCH
+            "{}",
+            serde_json::json!({
+                "product_id": PRODUCT_ID,
+                "version": VERSION,
+                "ledger_schema": LEDGER_SCHEMA_VERSION,
+                "onnx_feature": ready.feature_enabled,
+                "onnx_ready": ready.ready_for_inference,
+                "auto_engine": rradar_ocr::resolve_auto_engine_name(),
+                "models_dir": ready.models_dir,
+                "os": env::consts::OS,
+                "arch": env::consts::ARCH,
+                "policy": "local-first; no official cloud relay",
+            })
         );
         return Ok(());
     }
@@ -107,15 +119,51 @@ fn cmd_version(args: &[String]) -> Result<(), String> {
         println!("ledger_schema | {LEDGER_SCHEMA_VERSION}");
         println!(
             "onnx_feature  | {}",
-            if rradar_ocr::onnx_feature_enabled() {
+            if ready.feature_enabled {
                 "enabled"
             } else {
                 "disabled (build with --features onnx)"
             }
         );
+        println!(
+            "onnx_ready    | {} ({})",
+            ready.ready_for_inference, ready.hint
+        );
+        println!("auto_engine   | {}", rradar_ocr::resolve_auto_engine_name());
         println!("target        | {}-{}", env::consts::OS, env::consts::ARCH);
         println!("policy        | local-first; no official cloud relay");
     }
+    Ok(())
+}
+
+fn cmd_engines(args: &[String]) -> Result<(), String> {
+    let json = args.iter().any(|a| a == "--json");
+    if json {
+        println!("{}", rradar_ocr::engines_catalog_json());
+        return Ok(());
+    }
+    let ready = rradar_ocr::probe_onnx_readiness(rradar_ocr::default_models_dir());
+    let auto = rradar_ocr::resolve_auto_engine_name();
+    println!("rradar engines (local-first OCR; no cloud)");
+    println!("  mock  | available | fixtures, CI, default");
+    println!(
+        "  onnx  | {} | feature={} models={} pins={}/{} ort={}",
+        if ready.ready_for_inference {
+            "ready"
+        } else {
+            "not ready"
+        },
+        ready.feature_enabled,
+        ready.models_present,
+        ready.pin_ok_count,
+        ready.pin_total,
+        ready.ort_found
+    );
+    println!("  auto  | resolves → {auto}");
+    println!("  dir   | {}", ready.models_dir);
+    println!("  hint  | {}", ready.hint);
+    println!("  use   | rradar process FILE --engine mock|onnx|auto");
+    println!("  docs  | models/README.md · scripts/smoke-onnx.ps1");
     Ok(())
 }
 
@@ -256,15 +304,21 @@ fn cmd_doctor(_args: &[String]) -> Result<(), String> {
     for line in onnx_cfg.status_lines() {
         println!("{line}");
     }
+    let ready = rradar_ocr::probe_onnx_readiness(&models);
     println!(
-        "  engines:  mock (default), onnx{}",
-        if rradar_ocr::onnx_feature_enabled() {
-            " [feature ON]"
-        } else {
-            " [rebuild with --features onnx for inference]"
-        }
+        "  engines:  mock (default), onnx, auto→{}",
+        rradar_ocr::resolve_auto_engine_name()
+    );
+    println!(
+        "  onnx:     ready={} feature={} models={} ort={} — {}",
+        ready.ready_for_inference,
+        ready.feature_enabled,
+        ready.models_present,
+        ready.ort_found,
+        ready.hint
     );
     println!("  privacy:  local-first; no network required for core path");
+    println!("  engines:  rradar engines [--json]");
     println!("  demo:     rradar demo   # isolated closed-loop from fixtures/");
     Ok(())
 }
@@ -847,6 +901,13 @@ fn cmd_process(args: &[String]) -> Result<(), String> {
         );
     }
 
+    if engine.eq_ignore_ascii_case("auto") && !quiet {
+        eprintln!(
+            "engine auto → {} ({})",
+            rradar_ocr::resolve_auto_engine_name(),
+            rradar_ocr::probe_onnx_readiness(rradar_ocr::default_models_dir()).hint
+        );
+    }
     let eng = engine_by_name(&engine).map_err(|e| e.to_string())?;
     let categories = category_engine_with_packs();
     let opts_base = ProcessOptions {
@@ -2643,7 +2704,7 @@ process <files…> [options]
   --tags a,b,c      with --confirm, set free-form tags (schema v3)
   --explain         show amount candidates / rules
   --json --quiet -q
-  --engine mock|onnx
+  --engine mock|onnx|auto   (auto = onnx if feature+models ready)
   --currency CODE   (or RRADAR_DEFAULT_CURRENCY)
   --qr STR | --qr-file PATH
   --merchant --amount --category --date --notes
@@ -2680,6 +2741,10 @@ models [status|verify|pins] [--dir models]
   verify       exit 1 unless every pin file is present and hashes match
   Fetch weights: tools/fetch-models.ps1 | tools/fetch-models.sh
   Pins are committed; .onnx weights are not (see models/README.md).",
+        "engines" => "\
+engines [--json]
+  Show OCR engine availability: mock, onnx readiness, auto resolution.
+  process --engine auto uses onnx when feature+models ready, else mock.",
         "backup" => "\
 backup create -p PASS [-o file] [--db PATH]
 backup restore --in file -p PASS [--db PATH] [--merge]
@@ -2779,6 +2844,7 @@ Commands:
   import json|backup   Import JSON array or merge from .rradar
   migrate              Apply/report ledger schema migrations
   models               ONNX pack status / SHA-256 pin verify
+  engines              OCR engines readiness (mock|onnx|auto)
   seal / unseal        Whole-file encryption (.rrsealed)
 
 process options:
@@ -2787,7 +2853,7 @@ process options:
   --tags a,b           Free-form tags on confirm
   --explain            Show rules / amount candidates
   --json               JSON output
-  --engine mock|onnx   OCR backend (default mock; onnx needs --features onnx + models)
+  --engine mock|onnx|auto  OCR backend (auto = onnx when ready, else mock)
   --currency TWD|USD|… Default currency fallback
   --qr STR / --qr-file Path to TW e-invoice left QR
   --merchant --amount --category --date --notes

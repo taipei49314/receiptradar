@@ -67,6 +67,7 @@ cargo build -p rradar-ffi --release
 |----------|---------|
 | `list_rule_packs_json` | Installed pack paths |
 | `models_pins_json` | ONNX pin status |
+| `engines_json` | mock/onnx/auto catalog + ONNX readiness |
 
 ### Backup / handoff (no cloud)
 | Function | Purpose |

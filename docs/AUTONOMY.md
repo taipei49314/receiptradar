@@ -324,10 +324,34 @@ Tag: v0.1.0-cli.11
 | P2 | ONNX desktop polish / measured spike fill |
 | P3 | Release notes / install pin to latest cli tag |
 
+## Cycle 24 — ONNX readiness + engine auto (main axis #1)
+
+### Plan
+1. `OnnxReadiness` probe (feature / models / pins / ORT / ready_for_inference)
+2. `engine auto` + `engines_catalog_json`; CLI `rradar engines`
+3. version --long/--json + doctor surface readiness
+4. Measure mock bench → spike-ocr-size.md; docs INSTALL/models/README
+
+### Verify
+- `cargo test --workspace --locked` / clippy green (incl. auto→mock tests)
+- `rradar engines` works without weights
+
+### Result
+- True OCR path is **discoverable** and auto-selects when ready; CI stays mock-only  
+- Desktop mock p50≈5ms / p95≈6ms recorded (11 text fixtures)
+
+### Next seeds
+| Priority | Item |
+|----------|------|
+| P1 | Device A04 matrix fill when Android available |
+| P2 | FRB + camera when Flutter present |
+| P3 | Release package docs polish |
+
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
 - Green tests before re-plan  
 - Non-goals: official sync, GPT wrapper  
+
 
 
 

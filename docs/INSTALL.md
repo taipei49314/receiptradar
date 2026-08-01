@@ -31,7 +31,9 @@ cargo install --path crates/rradar-cli --locked --features onnx
 # then fetch models + ORT — see models/README.md
 powershell -File tools/fetch-models.ps1 -FetchOrt   # Windows
 # ./tools/fetch-models.sh && RRADAR_FETCH_ORT=1 ./tools/fetch-models.sh
+rradar engines --json
 rradar process photo.jpg --engine onnx --explain
+# or: --engine auto  (uses onnx when ready, else mock)
 ```
 
 ## Option B — GitHub Release binaries
@@ -63,7 +65,7 @@ Or use the helper:
 
 ```bash
 ./scripts/install-from-release.sh          # auto-detect OS/arch
-./scripts/install-from-release.sh v0.1.0-cli.5
+./scripts/install-from-release.sh v0.1.0-cli.16
 ```
 
 ### Windows (PowerShell)
@@ -71,8 +73,9 @@ Or use the helper:
 ```powershell
 powershell -File scripts/install-from-release.ps1
 # or pin a tag:
-powershell -File scripts/install-from-release.ps1 -Tag v0.1.0-cli.5
+powershell -File scripts/install-from-release.ps1 -Tag v0.1.0-cli.16
 rradar version --long
+rradar engines
 ```
 
 Binaries land in `%USERPROFILE%\.cargo\bin` when that directory exists, else `~\bin` (printed by the script).

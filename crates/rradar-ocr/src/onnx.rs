@@ -153,6 +153,77 @@ pub fn onnx_feature_enabled() -> bool {
     cfg!(feature = "onnx")
 }
 
+/// Snapshot of whether desktop ONNX inference can run *right now*.
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct OnnxReadiness {
+    pub feature_enabled: bool,
+    pub models_dir: String,
+    pub det_present: bool,
+    pub rec_present: bool,
+    pub cls_present: bool,
+    pub models_present: bool,
+    pub pins_ok: bool,
+    pub pin_ok_count: u32,
+    pub pin_total: u32,
+    pub ort_found: bool,
+    pub ort_path: Option<String>,
+    /// True only when feature + all three models exist (ORT optional until first infer).
+    pub ready_for_inference: bool,
+    pub hint: String,
+}
+
+/// Probe ONNX readiness under `models_dir` (does not load weights into memory).
+pub fn probe_onnx_readiness(models_dir: impl AsRef<Path>) -> OnnxReadiness {
+    let dir = models_dir.as_ref();
+    let cfg = OnnxConfig::from_models_dir(dir);
+    let det = cfg.det_model.is_file();
+    let rec = cfg.rec_model.is_file();
+    let cls = cfg.cls_model.is_file();
+    let models_present = det && rec && cls;
+    let feature = onnx_feature_enabled();
+    let ort = std::env::var_os("ORT_DYLIB_PATH")
+        .map(PathBuf::from)
+        .filter(|p| p.is_file())
+        .or_else(|| auto_ort_dylib(dir));
+    let ort_found = ort.is_some();
+    let (pin_ok_count, pin_total, pins_ok) = match crate::manifest::verify_models_dir(dir, false) {
+        Ok(checks) if checks.is_empty() => (0, 0, false),
+        Ok(checks) => {
+            let ok = checks.iter().filter(|c| c.is_ok()).count() as u32;
+            let n = checks.len() as u32;
+            (ok, n, ok == n && n > 0)
+        }
+        Err(_) => (0, 0, false),
+    };
+    let ready = feature && models_present;
+    let hint = if ready && ort_found {
+        "onnx ready — process --engine onnx|auto".into()
+    } else if ready && !ort_found {
+        "models present; set ORT_DYLIB_PATH or models/ort/ for load-dynamic ORT".into()
+    } else if !feature && models_present {
+        "models on disk; rebuild CLI with --features onnx".into()
+    } else if feature && !models_present {
+        "feature ON; run tools/fetch-models.ps1 (or .sh) then rradar models verify".into()
+    } else {
+        "mock default — fetch models + --features onnx for real OCR (models/README.md)".into()
+    };
+    OnnxReadiness {
+        feature_enabled: feature,
+        models_dir: dir.display().to_string(),
+        det_present: det,
+        rec_present: rec,
+        cls_present: cls,
+        models_present,
+        pins_ok,
+        pin_ok_count,
+        pin_total,
+        ort_found,
+        ort_path: ort.map(|p| p.display().to_string()),
+        ready_for_inference: ready,
+        hint,
+    }
+}
+
 /// ONNX engine. With feature `onnx` and models on disk, runs RapidOCR inference.
 #[derive(Debug)]
 pub struct OnnxOcrEngine {

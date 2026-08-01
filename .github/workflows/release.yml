@@ -40,6 +40,8 @@ jobs:
         run: |
           if [[ -f target/release/rradar.exe ]]; then B=target/release/rradar.exe; else B=target/release/rradar; fi
           "$B" version --long
+          "$B" version --json
+          "$B" engines
           "$B" help >/dev/null
 
       - name: Package (unix)

@@ -1499,6 +1499,7 @@ dependencies = [
  "ort",
  "paddle-ocr-rs",
  "serde",
+ "serde_json",
  "sha2",
  "thiserror",
 ]

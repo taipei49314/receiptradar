@@ -81,8 +81,9 @@ rradar help
 |--------|-----|
 | `mock` (default) | Fixtures, CI, development |
 | `onnx` | Real RapidOCR: `tools/fetch-models.ps1 -FetchOrt` then `cargo run -p rradar-cli --features onnx -- process img.jpg --engine onnx` |
+| `auto` | ONNX when feature+models ready, else mock (`rradar engines`) |
 
-Details: [models/README.md](./models/README.md).
+Details: [models/README.md](./models/README.md) · spike [docs/spike-ocr-size.md](./docs/spike-ocr-size.md).
 
 ## Mobile / FFI
 
