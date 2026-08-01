@@ -43,6 +43,23 @@ Core columns from v1 (id, amounts, currency, category, invoice_id, hashes, notes
 
 Indexes: date+currency, merchant, invoice_id, content_hash.
 
+### Query surface (CLI / FFI)
+
+`list` / `query_transactions` support optional filters (no schema bump):
+
+| filter | meaning |
+|--------|---------|
+| `--tag` / `tag` | whole token match in comma-separated `tags` |
+| `--category` | exact category id |
+| `--query` | substring on merchant, category, notes, tags |
+| `--from` / `--to` | inclusive `YYYY-MM-DD` on `transacted_at` |
+| `--min-amount` / `--max-amount` | major units in filter currency |
+| `--has-attachment` | non-empty `attachment_path` |
+
+### Local budgets (not in SQLite)
+
+Soft monthly limits live in **`{data_dir}/budgets.toml`** (major units). Never mixed across currencies. CLI: `rradar budget set|status|list`. Reports embed a **Budgets** section when lines exist.
+
 ## Attachment store (local)
 
 Receipt images/files are **not** embedded in SQLite. They live next to the ledger:

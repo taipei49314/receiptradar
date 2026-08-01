@@ -3,15 +3,16 @@
 mod serve;
 
 use rradar_core::{
-    apply_edits, apply_handoff_merge, attachments_root_for_db, category_engine_with_packs,
-    create_backup, create_handoff, data_dir, default_db_path, ensure_data_dir, ensure_inbox_dir,
-    ensure_rules_dir, inbox_dir, inspect_backup, inspect_handoff, install_rule_pack,
-    list_rule_files, monthly_markdown, normalize_tags, open_ledger_auto, process_path,
+    apply_edits, apply_handoff_merge, attachments_root_for_db, budget_status_month,
+    category_engine_with_packs, create_backup, create_handoff, data_dir, default_db_path,
+    ensure_data_dir, ensure_inbox_dir, ensure_rules_dir, inbox_dir, inspect_backup,
+    inspect_handoff, install_rule_pack, list_rule_files, monthly_markdown,
+    monthly_markdown_with_budgets, normalize_tags, open_ledger_auto, process_path,
     remove_stored_attachment, resolve_attachment_path, restore_backup, rules_dir, save_sealed,
     store_attachment, transactions_from_backup, transactions_to_csv, transactions_to_json,
     verify_backup, write_handoff_file, write_restored_attachments, write_restored_db, AppConfig,
-    Iso4217, Money, ProcessOptions, ReceiptDraft, Transaction, TxUpdate, UserEdits,
-    LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
+    BudgetBook, Iso4217, Money, ProcessOptions, ReceiptDraft, Transaction, TxFilter, TxUpdate,
+    UserEdits, LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
 };
 use rradar_ocr::engine_by_name;
 use std::env;
@@ -45,6 +46,8 @@ fn main() -> ExitCode {
         "import" => cmd_import(&args[1..]),
         "list" | "ls" | "search" => cmd_list(&args[1..]),
         "count" => cmd_count(&args[1..]),
+        "tags" => cmd_tags(&args[1..]),
+        "budget" => cmd_budget(&args[1..]),
         "last" | "undo" => cmd_last_or_undo(&args[0], &args[1..]),
         "show" => cmd_show(&args[1..]),
         "delete" | "rm" => cmd_delete(&args[1..]),
@@ -778,6 +781,39 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
         }
     }
 
+    // Tag filter + local soft budgets (axis #2 product surface).
+    let tag_hits = ledger
+        .query_transactions(&TxFilter {
+            limit: 20,
+            tag: Some("demo".into()),
+            ..Default::default()
+        })
+        .map_err(|e| e.to_string())?;
+    let mut demo_budgets = BudgetBook::default();
+    demo_budgets
+        .set_major("TWD", "50", None)
+        .map_err(|e| e.to_string())?;
+    let budget_st =
+        budget_status_month(&ledger, &demo_budgets, 2024, 5).map_err(|e| e.to_string())?;
+    if !quiet {
+        println!("── tags + budget (local soft limits) ──");
+        println!("  tags list | {:?}", ledger.list_tags().unwrap_or_default());
+        println!("  filter --tag demo | {} hit(s)", tag_hits.len());
+        for s in &budget_st {
+            let iso = Iso4217::parse(&s.currency).unwrap_or(Iso4217::TWD);
+            println!(
+                "  budget {} | spent={} limit={} {} ({:.0}%)",
+                s.currency,
+                Money::new(s.spent_minor, iso).display_major(),
+                Money::new(s.limit_minor, iso).display_major(),
+                if s.over { "OVER" } else { "ok" },
+                s.ratio * 100.0
+            );
+        }
+        println!("  hint | rradar budget set --currency TWD --monthly 30000");
+        println!("  hint | rradar list --tag demo --min-amount 10");
+    }
+
     step(7, "stats + top merchants");
     let stats = ledger.stats_by_currency_all().map_err(|e| e.to_string())?;
     if !quiet {
@@ -839,14 +875,15 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
         }
     }
 
-    step(10, "monthly markdown report");
+    step(10, "monthly markdown report (+ budgets section)");
     // Pick a month that appears in fixtures (2024-05 family mart).
-    let md = monthly_markdown(&ledger, 2024, 5).map_err(|e| e.to_string())?;
+    let md = monthly_markdown_with_budgets(&ledger, 2024, 5, &demo_budgets)
+        .map_err(|e| e.to_string())?;
     let report_path = out_dir.join("demo-report-2024-05.md");
     std::fs::write(&report_path, &md).map_err(|e| e.to_string())?;
     if !quiet {
         println!("  report | {}", report_path.display());
-        for line in md.lines().take(6) {
+        for line in md.lines().take(8) {
             println!("  | {line}");
         }
     }
@@ -1455,8 +1492,15 @@ fn cmd_list(args: &[String]) -> Result<(), String> {
     let mut offset = 0usize;
     let mut currency: Option<String> = None;
     let mut query: Option<String> = None;
+    let mut tag: Option<String> = None;
+    let mut category: Option<String> = None;
     let mut year: Option<i32> = None;
     let mut month: Option<u32> = None;
+    let mut from: Option<String> = None;
+    let mut to: Option<String> = None;
+    let mut min_amount: Option<String> = None;
+    let mut max_amount: Option<String> = None;
+    let mut has_attachment: Option<bool> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -1485,6 +1529,14 @@ fn cmd_list(args: &[String]) -> Result<(), String> {
                 i += 1;
                 query = Some(args.get(i).ok_or("--query needs value")?.clone());
             }
+            "--tag" => {
+                i += 1;
+                tag = Some(args.get(i).ok_or("--tag needs value")?.clone());
+            }
+            "--category" => {
+                i += 1;
+                category = Some(args.get(i).ok_or("--category needs value")?.clone());
+            }
             "--year" => {
                 i += 1;
                 year = Some(
@@ -1503,22 +1555,70 @@ fn cmd_list(args: &[String]) -> Result<(), String> {
                         .map_err(|_| "bad month")?,
                 );
             }
+            "--from" => {
+                i += 1;
+                from = Some(args.get(i).ok_or("--from needs date")?.clone());
+            }
+            "--to" => {
+                i += 1;
+                to = Some(args.get(i).ok_or("--to needs date")?.clone());
+            }
+            "--min-amount" => {
+                i += 1;
+                min_amount = Some(args.get(i).ok_or("--min-amount needs value")?.clone());
+            }
+            "--max-amount" => {
+                i += 1;
+                max_amount = Some(args.get(i).ok_or("--max-amount needs value")?.clone());
+            }
+            "--has-attachment" => has_attachment = Some(true),
+            "--no-attachment" => has_attachment = Some(false),
             _ => {}
         }
         i += 1;
     }
     let flags = extract_db_from_all(args)?;
+    let ccy_for_amt = currency
+        .as_deref()
+        .and_then(Iso4217::parse)
+        .unwrap_or_else(default_currency_from_env);
+
+    let mut filter = TxFilter {
+        limit,
+        offset,
+        currency,
+        query,
+        tag,
+        category,
+        year_month: match (year, month) {
+            (Some(y), Some(m)) => Some(format!("{y:04}-{m:02}")),
+            _ => None,
+        },
+        from,
+        to,
+        min_minor: None,
+        max_minor: None,
+        has_attachment,
+    };
+    if let Some(ref s) = min_amount {
+        filter.min_minor = Some(
+            Money::from_major_str(s, ccy_for_amt)
+                .map_err(|e| e.to_string())?
+                .amount_minor,
+        );
+    }
+    if let Some(ref s) = max_amount {
+        filter.max_minor = Some(
+            Money::from_major_str(s, ccy_for_amt)
+                .map_err(|e| e.to_string())?
+                .amount_minor,
+        );
+    }
 
     let (ledger, tmp) = open_db(&flags)?;
-    let rows = if let (Some(y), Some(m)) = (year, month) {
-        ledger
-            .list_by_month(y, m, limit)
-            .map_err(|e| e.to_string())?
-    } else {
-        ledger
-            .list_filtered(limit, offset, currency.as_deref(), query.as_deref())
-            .map_err(|e| e.to_string())?
-    };
+    let rows = ledger
+        .query_transactions(&filter)
+        .map_err(|e| e.to_string())?;
     if json {
         println!(
             "{}",
@@ -1532,6 +1632,233 @@ fn cmd_list(args: &[String]) -> Result<(), String> {
         let _ = std::fs::remove_file(t);
     }
     Ok(())
+}
+
+fn cmd_tags(args: &[String]) -> Result<(), String> {
+    let json = args.iter().any(|a| a == "--json");
+    let flags = extract_db_from_all(args)?;
+    let (ledger, tmp) = open_db(&flags)?;
+    let tags = ledger.list_tags().map_err(|e| e.to_string())?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&tags).unwrap_or_default()
+        );
+    } else if tags.is_empty() {
+        println!("(no tags)");
+    } else {
+        for t in &tags {
+            println!("{t}");
+        }
+        eprintln!("({} tags)", tags.len());
+    }
+    if let Some(t) = tmp {
+        let _ = std::fs::remove_file(t);
+    }
+    Ok(())
+}
+
+fn cmd_budget(args: &[String]) -> Result<(), String> {
+    if args.is_empty() {
+        return Err(
+            "usage: rradar budget list|status|set|clear|path [--year Y --month M] [--json]".into(),
+        );
+    }
+    let sub = args[0].as_str();
+    let rest = &args[1..];
+    match sub {
+        "path" => {
+            println!("{}", BudgetBook::path().display());
+            Ok(())
+        }
+        "list" | "show" => {
+            let book = BudgetBook::load();
+            let json = rest.iter().any(|a| a == "--json");
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&book).unwrap_or_else(|_| "{}".into())
+                );
+            } else if book.lines.is_empty() {
+                println!(
+                    "(no budgets) — set with: rradar budget set --currency TWD --monthly 30000"
+                );
+                println!("path | {}", BudgetBook::path().display());
+            } else {
+                for line in &book.lines {
+                    let iso = Iso4217::parse(&line.currency).unwrap_or(Iso4217::TWD);
+                    let major = Money::new(line.limit_minor, iso).display_major();
+                    match &line.category {
+                        None => println!("overall | {} | limit={}", line.currency, major),
+                        Some(c) => {
+                            println!("category | {} | {} | limit={}", line.currency, c, major)
+                        }
+                    }
+                }
+                println!("path | {}", BudgetBook::path().display());
+            }
+            Ok(())
+        }
+        "set" => {
+            let mut currency = default_currency_from_env().to_string();
+            let mut monthly: Option<String> = None;
+            let mut category: Option<String> = None;
+            let mut amount: Option<String> = None;
+            let mut i = 0;
+            while i < rest.len() {
+                match rest[i].as_str() {
+                    "--currency" | "-c" => {
+                        i += 1;
+                        currency = rest.get(i).ok_or("needs currency")?.clone();
+                    }
+                    "--monthly" | "--limit" => {
+                        i += 1;
+                        monthly = Some(rest.get(i).ok_or("needs amount")?.clone());
+                    }
+                    "--category" => {
+                        i += 1;
+                        category = Some(rest.get(i).ok_or("needs category")?.clone());
+                    }
+                    "--amount" => {
+                        i += 1;
+                        amount = Some(rest.get(i).ok_or("needs amount")?.clone());
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            let major = monthly
+                .or(amount)
+                .ok_or("usage: rradar budget set --currency TWD --monthly 30000 [--category ID]")?;
+            let mut book = BudgetBook::load();
+            book.set_major(&currency, &major, category.as_deref())?;
+            book.save().map_err(|e| e.to_string())?;
+            println!(
+                "saved | {} | {} | {} | path={}",
+                currency,
+                category.as_deref().unwrap_or("overall"),
+                major,
+                BudgetBook::path().display()
+            );
+            Ok(())
+        }
+        "clear" => {
+            let mut currency: Option<String> = None;
+            let mut category: Option<String> = None;
+            let mut all = false;
+            let mut i = 0;
+            while i < rest.len() {
+                match rest[i].as_str() {
+                    "--all" => all = true,
+                    "--currency" | "-c" => {
+                        i += 1;
+                        currency = Some(rest.get(i).ok_or("needs currency")?.clone());
+                    }
+                    "--category" => {
+                        i += 1;
+                        category = Some(rest.get(i).ok_or("needs category")?.clone());
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            let mut book = BudgetBook::load();
+            if all {
+                book.clear_all();
+                book.save().map_err(|e| e.to_string())?;
+                println!("cleared | all budgets");
+                return Ok(());
+            }
+            let ccy = currency
+                .ok_or("usage: rradar budget clear --currency TWD [--category ID] | --all")?;
+            if book.clear_line(&ccy, category.as_deref()) {
+                book.save().map_err(|e| e.to_string())?;
+                println!(
+                    "cleared | {} | {}",
+                    ccy,
+                    category.as_deref().unwrap_or("overall")
+                );
+            } else {
+                return Err("no matching budget line".into());
+            }
+            Ok(())
+        }
+        "status" | "check" => {
+            let mut year: Option<i32> = None;
+            let mut month: Option<u32> = None;
+            let json = rest.iter().any(|a| a == "--json");
+            let mut i = 0;
+            while i < rest.len() {
+                match rest[i].as_str() {
+                    "--year" => {
+                        i += 1;
+                        year = Some(
+                            rest.get(i)
+                                .ok_or("needs year")?
+                                .parse()
+                                .map_err(|_| "bad year")?,
+                        );
+                    }
+                    "--month" => {
+                        i += 1;
+                        month = Some(
+                            rest.get(i)
+                                .ok_or("needs month")?
+                                .parse()
+                                .map_err(|_| "bad month")?,
+                        );
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            let (y, m) = match (year, month) {
+                (Some(y), Some(m)) => (y, m),
+                _ => current_year_month(),
+            };
+            let book = BudgetBook::load();
+            if book.lines.is_empty() {
+                if json {
+                    println!("[]");
+                } else {
+                    println!("(no budgets configured)");
+                    println!("hint | rradar budget set --currency TWD --monthly 30000");
+                }
+                return Ok(());
+            }
+            let flags = extract_db_from_all(rest)?;
+            let (ledger, tmp) = open_db(&flags)?;
+            let statuses = budget_status_month(&ledger, &book, y, m).map_err(|e| e.to_string())?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&statuses).unwrap_or_else(|_| "[]".into())
+                );
+            } else {
+                println!("period | {y:04}-{m:02}");
+                for s in &statuses {
+                    let iso = Iso4217::parse(&s.currency).unwrap_or(Iso4217::TWD);
+                    let spent = Money::new(s.spent_minor, iso).display_major();
+                    let limit = Money::new(s.limit_minor, iso).display_major();
+                    let rem = Money::new(s.remaining_minor, iso).display_major();
+                    let scope = s.category.as_deref().unwrap_or("overall");
+                    let flag = if s.over { "OVER" } else { "ok" };
+                    println!(
+                        "{flag} | {} | {scope} | spent={spent} limit={limit} remaining={rem} ({:.0}%)",
+                        s.currency,
+                        s.ratio * 100.0
+                    );
+                }
+            }
+            if let Some(t) = tmp {
+                let _ = std::fs::remove_file(t);
+            }
+            Ok(())
+        }
+        other => Err(format!(
+            "unknown budget subcommand `{other}` — list|status|set|clear|path"
+        )),
+    }
 }
 
 fn cmd_last_or_undo(cmd: &str, args: &[String]) -> Result<(), String> {
@@ -2890,11 +3217,24 @@ process <files…> [options]
 manual --merchant NAME --amount MAJOR [--currency TWD] [--category ID] [--date YYYY-MM-DD] [--notes N]
   Insert a transaction without OCR. Alias: entry",
         "list" | "ls" | "search" => "\
-list [--json] [--limit N] [--offset N] [--currency C] [--query Q] [--db PATH]
-  Aliases: ls, search. Table output uses | separators.",
+list [--json] [--limit N] [--offset N] [--currency C] [--query Q]
+     [--tag T] [--category ID] [--year Y --month M] [--from DATE --to DATE]
+     [--min-amount N] [--max-amount N] [--has-attachment|--no-attachment] [--db PATH]
+  Aliases: ls, search. Table output uses | separators.
+  Tag match is whole token in comma-separated tags (schema v3).",
+        "tags" => "\
+tags [--json] [--db PATH]
+  List distinct free-form tag tokens in the ledger.",
+        "budget" => "\
+budget list|status|set|clear|path
+  Local soft monthly limits (data_dir/budgets.toml). Never mixed across currencies.
+  set --currency TWD --monthly 30000 [--category food_dining]
+  status [--year Y --month M] [--json] [--db PATH]
+  clear --currency TWD [--category ID] | --all",
         "stats" => "\
 stats [--year Y --month M | --from DATE --to DATE | --all] [--db PATH]
-  Per-currency totals only (never mixes currencies). Default: current UTC month.",
+  Per-currency totals only (never mixes currencies). Default: current UTC month.
+  Pair with: rradar budget status",
         "top" => "\
 top [--currency TWD] [--limit 10] [--db PATH]
   Top merchants by spend within one currency.",
@@ -3001,7 +3341,9 @@ Commands:
   process <files…>     Parse receipt(s) (alias: add); batch OK
   manual               Manual entry without OCR (alias: entry)
   import json <file>   Import transactions JSON array
-  list                 List transactions (alias: ls, search)
+  list                 List/search transactions (alias: ls, search)
+  tags                 Distinct free-form tags in ledger
+  budget               Local monthly soft limits (set|status|list)
   count                Transaction count
   last                 Show most recently confirmed row (JSON)
   undo --yes           Delete most recently confirmed row

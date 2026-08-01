@@ -139,6 +139,32 @@ pub struct TxUpdate {
     pub attachment_path: Option<String>,
 }
 
+/// Unified list/search filter (schema v3 tags, amount range, attachments).
+///
+/// All fields optional; empty filter = recent transactions with limit/offset.
+#[derive(Debug, Clone, Default)]
+pub struct TxFilter {
+    pub limit: usize,
+    pub offset: usize,
+    pub currency: Option<String>,
+    /// Substring match on merchant / category / notes / tags.
+    pub query: Option<String>,
+    /// Tag token match (comma list contains this tag, case-insensitive).
+    pub tag: Option<String>,
+    /// Exact category id.
+    pub category: Option<String>,
+    /// Calendar month prefix `YYYY-MM`.
+    pub year_month: Option<String>,
+    /// Inclusive date lower bound `YYYY-MM-DD` on `transacted_at`.
+    pub from: Option<String>,
+    /// Inclusive date upper bound `YYYY-MM-DD` on `transacted_at`.
+    pub to: Option<String>,
+    pub min_minor: Option<i64>,
+    pub max_minor: Option<i64>,
+    /// `Some(true)` = has attachment path; `Some(false)` = none.
+    pub has_attachment: Option<bool>,
+}
+
 pub struct Ledger {
     conn: Connection,
     path: PathBuf,
@@ -666,49 +692,108 @@ impl Ledger {
         currency: Option<&str>,
         query: Option<&str>,
     ) -> Result<Vec<Transaction>, LedgerError> {
-        let lim = limit as i64;
-        let off = offset as i64;
-        match (currency, query) {
-            (None, None) => self.list_transactions(limit, offset),
-            (Some(c), None) => {
-                let mut stmt = self.conn.prepare(
-                    r#"SELECT id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
-                              category, invoice_id, source_path, overall_confidence, content_hash, notes,
-                              tags, attachment_path
-                       FROM transactions WHERE currency = ?1
-                       ORDER BY transacted_at DESC, confirmed_at DESC LIMIT ?2 OFFSET ?3"#,
-                )?;
-                let rows = stmt.query_map(params![c, lim, off], row_to_tx)?;
-                rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        self.query_transactions(&TxFilter {
+            limit,
+            offset,
+            currency: currency.map(|s| s.to_string()),
+            query: query.map(|s| s.to_string()),
+            ..Default::default()
+        })
+    }
+
+    /// Rich query: tags, category, date range, amount bounds, attachment flag.
+    pub fn query_transactions(&self, f: &TxFilter) -> Result<Vec<Transaction>, LedgerError> {
+        let mut sql = String::from(
+            r#"SELECT id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
+                      category, invoice_id, source_path, overall_confidence, content_hash, notes,
+                      tags, attachment_path
+               FROM transactions WHERE 1=1"#,
+        );
+        let mut vals: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+        if let Some(ref c) = f.currency {
+            sql.push_str(" AND currency = ?");
+            vals.push(Box::new(c.clone()));
+        }
+        if let Some(ref q) = f.query {
+            sql.push_str(
+                " AND (merchant LIKE ? OR category LIKE ? OR IFNULL(notes,'') LIKE ? OR IFNULL(tags,'') LIKE ?)",
+            );
+            let pat = format!("%{q}%");
+            vals.push(Box::new(pat.clone()));
+            vals.push(Box::new(pat.clone()));
+            vals.push(Box::new(pat.clone()));
+            vals.push(Box::new(pat));
+        }
+        if let Some(ref tag) = f.tag {
+            // Comma-separated tags: match whole token case-insensitively via LIKE boundaries.
+            let t = tag.trim().to_lowercase();
+            sql.push_str(" AND (',' || lower(IFNULL(tags,'')) || ',') LIKE ?");
+            vals.push(Box::new(format!("%,{t},%")));
+        }
+        if let Some(ref cat) = f.category {
+            sql.push_str(" AND category = ?");
+            vals.push(Box::new(cat.clone()));
+        }
+        if let Some(ref ym) = f.year_month {
+            sql.push_str(" AND substr(transacted_at,1,7) = ?");
+            vals.push(Box::new(ym.clone()));
+        }
+        if let Some(ref from) = f.from {
+            sql.push_str(" AND substr(transacted_at,1,10) >= ?");
+            vals.push(Box::new(from.clone()));
+        }
+        if let Some(ref to) = f.to {
+            sql.push_str(" AND substr(transacted_at,1,10) <= ?");
+            vals.push(Box::new(to.clone()));
+        }
+        if let Some(min) = f.min_minor {
+            sql.push_str(" AND amount_minor >= ?");
+            vals.push(Box::new(min));
+        }
+        if let Some(max) = f.max_minor {
+            sql.push_str(" AND amount_minor <= ?");
+            vals.push(Box::new(max));
+        }
+        match f.has_attachment {
+            Some(true) => {
+                sql.push_str(" AND attachment_path IS NOT NULL AND length(attachment_path) > 0");
             }
-            (None, Some(q)) => {
-                let pat = format!("%{q}%");
-                let mut stmt = self.conn.prepare(
-                    r#"SELECT id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
-                              category, invoice_id, source_path, overall_confidence, content_hash, notes,
-                              tags, attachment_path
-                       FROM transactions
-                       WHERE merchant LIKE ?1 OR category LIKE ?1 OR IFNULL(notes,'') LIKE ?1
-                       ORDER BY transacted_at DESC, confirmed_at DESC LIMIT ?2 OFFSET ?3"#,
-                )?;
-                let rows = stmt.query_map(params![pat, lim, off], row_to_tx)?;
-                rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+            Some(false) => {
+                sql.push_str(" AND (attachment_path IS NULL OR length(attachment_path) = 0)");
             }
-            (Some(c), Some(q)) => {
-                let pat = format!("%{q}%");
-                let mut stmt = self.conn.prepare(
-                    r#"SELECT id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
-                              category, invoice_id, source_path, overall_confidence, content_hash, notes,
-                              tags, attachment_path
-                       FROM transactions
-                       WHERE currency = ?1
-                         AND (merchant LIKE ?2 OR category LIKE ?2 OR IFNULL(notes,'') LIKE ?2)
-                       ORDER BY transacted_at DESC, confirmed_at DESC LIMIT ?3 OFFSET ?4"#,
-                )?;
-                let rows = stmt.query_map(params![c, pat, lim, off], row_to_tx)?;
-                rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+            None => {}
+        }
+
+        sql.push_str(" ORDER BY transacted_at DESC, confirmed_at DESC LIMIT ? OFFSET ?");
+        let lim = if f.limit == 0 { 50 } else { f.limit } as i64;
+        let off = f.offset as i64;
+        vals.push(Box::new(lim));
+        vals.push(Box::new(off));
+
+        let params: Vec<&dyn rusqlite::ToSql> = vals.iter().map(|b| b.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params.as_slice(), row_to_tx)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Distinct tag tokens across the ledger (sorted).
+    pub fn list_tags(&self) -> Result<Vec<String>, LedgerError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT tags FROM transactions WHERE tags IS NOT NULL AND tags != ''")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let mut set = std::collections::BTreeSet::new();
+        for r in rows {
+            let raw = r?;
+            for part in raw.split(',') {
+                let t = part.trim();
+                if !t.is_empty() {
+                    set.insert(t.to_string());
+                }
             }
         }
+        Ok(set.into_iter().collect())
     }
 
     /// Per-currency totals for a date prefix range [from, to] inclusive on YYYY-MM-DD strings.
@@ -1107,6 +1192,53 @@ mod tests {
         let found = db.list_filtered(10, 0, None, Some("肯德")).unwrap();
         assert_eq!(found.len(), 1);
         assert!(found[0].merchant.contains("肯德"));
+    }
+
+    #[test]
+    fn query_by_tag_and_amount() {
+        let db = Ledger::open_in_memory().unwrap();
+        db.confirm_draft(&sample_draft("1", None, 100), None, None, false)
+            .unwrap();
+        db.confirm_draft(&sample_draft("2", None, 5000), None, None, false)
+            .unwrap();
+        db.update_transaction(
+            "1",
+            &TxUpdate {
+                tags: Some("demo,work".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        db.update_transaction(
+            "2",
+            &TxUpdate {
+                tags: Some("personal".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let tagged = db
+            .query_transactions(&TxFilter {
+                limit: 50,
+                tag: Some("work".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(tagged.len(), 1);
+        assert_eq!(tagged[0].id, "1");
+        let range = db
+            .query_transactions(&TxFilter {
+                limit: 50,
+                min_minor: Some(1000),
+                max_minor: Some(10_000),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(range.len(), 1);
+        assert_eq!(range[0].id, "2");
+        let tags = db.list_tags().unwrap();
+        assert!(tags.iter().any(|t| t == "demo"));
+        assert!(tags.iter().any(|t| t == "work"));
     }
 
     #[test]

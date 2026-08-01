@@ -369,6 +369,28 @@ Tag: v0.1.0-cli.11
 | P2 | FRB when Flutter present |
 | P3 | Ledger tag filter / budget UX (axis #2) |
 
+## Cycle 26 — tag filter + local budget UX (main axis #2)
+
+### Plan
+1. `TxFilter` / `query_transactions` (tag, category, date, amount, attachment)
+2. CLI `list` filters + `rradar tags` + `rradar budget set|status|list|clear`
+3. Report embeds Budgets section; demo shows tag filter + soft budget
+4. FFI query/tags/budget surface; docs ledger-schema + cli
+
+### Verify
+- `cargo test --workspace --locked` / clippy green
+- Budget unit tests (parse, status OVER on category)
+
+### Result
+- Schema v3 tags are first-class for search; local soft budgets without cloud
+
+### Next seeds
+| Priority | Item |
+|----------|------|
+| P1 | Demo showcase narrative / README product path (axis #5) |
+| P2 | Supply-chain / license CI gate (axis #4) |
+| P3 | FRB when Flutter present |
+
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
 - Green tests before re-plan  

@@ -1,5 +1,6 @@
 //! Human-readable spending reports (markdown).
 
+use crate::budget::{budget_markdown_section, BudgetBook};
 use crate::category::categories_en;
 use crate::ledger::{Ledger, LedgerError};
 use crate::money::{Iso4217, Money};
@@ -7,6 +8,16 @@ use crate::{PRODUCT_ID, VERSION};
 
 /// Build a markdown monthly report for one calendar month.
 pub fn monthly_markdown(ledger: &Ledger, year: i32, month: u32) -> Result<String, LedgerError> {
+    monthly_markdown_with_budgets(ledger, year, month, &BudgetBook::load())
+}
+
+/// Monthly report with an explicit budget book (tests / custom path).
+pub fn monthly_markdown_with_budgets(
+    ledger: &Ledger,
+    year: i32,
+    month: u32,
+    budgets: &BudgetBook,
+) -> Result<String, LedgerError> {
     let ym = format!("{year:04}-{month:02}");
     let by_cur = ledger.stats_by_currency_month(year, month)?;
     let txs = ledger.list_by_month(year, month, 100_000)?;
@@ -18,6 +29,8 @@ pub fn monthly_markdown(ledger: &Ledger, year: i32, month: u32) -> Result<String
 
     if by_cur.is_empty() {
         out.push_str("No transactions in this month.\n");
+        let bud = budget_markdown_section(ledger, budgets, year, month)?;
+        out.push_str(&bud);
         return Ok(out);
     }
 
@@ -32,6 +45,9 @@ pub fn monthly_markdown(ledger: &Ledger, year: i32, month: u32) -> Result<String
         out.push_str(&format!("| {} | {} | {} |\n", s.currency, major, s.count));
     }
     out.push('\n');
+
+    let bud = budget_markdown_section(ledger, budgets, year, month)?;
+    out.push_str(&bud);
 
     for s in &by_cur {
         out.push_str(&format!("## Categories ({})\n\n", s.currency));

@@ -49,10 +49,13 @@ rradar process receipt.txt --explain
 rradar process receipt.txt --confirm \
   --merchant "全家臨江店" --amount 89 --category grocery_convenience
 
-# 3) Browse
+# 3) Browse / search
 rradar list
 rradar list --year 2024 --month 5
 rradar list --query 全家 --currency TWD
+rradar list --tag demo --min-amount 10 --max-amount 500
+rradar list --category grocery_convenience --has-attachment
+rradar tags
 rradar last
 rradar show <id>
 rradar count
@@ -60,6 +63,13 @@ rradar stats              # this calendar month, per currency
 rradar stats --all
 rradar stats --from 2024-01-01 --to 2024-12-31
 rradar top --currency TWD --limit 10
+
+# 3b) Local soft budgets (never mixed across currencies)
+rradar budget set --currency TWD --monthly 30000
+rradar budget set --currency TWD --monthly 5000 --category food_dining
+rradar budget status --year 2024 --month 5
+rradar budget list
+rradar report             # includes Budgets section when configured
 
 # 4) Fix mistakes
 rradar edit <id> --amount 99 --notes "招待客戶"

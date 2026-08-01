@@ -13,12 +13,12 @@
 #![deny(unsafe_code)]
 
 use rradar_core::{
-    apply_handoff_merge, attachments_root_for_db, category_engine_with_packs, create_backup,
-    create_handoff, data_dir, default_db_path, ensure_inbox_dir, ensure_rules_dir, inbox_dir,
-    inspect_handoff, list_rule_files, normalize_tags, open_ledger_auto, process_bytes,
+    apply_handoff_merge, attachments_root_for_db, budget_status_month, category_engine_with_packs,
+    create_backup, create_handoff, data_dir, default_db_path, ensure_inbox_dir, ensure_rules_dir,
+    inbox_dir, inspect_handoff, list_rule_files, normalize_tags, open_ledger_auto, process_bytes,
     process_path, remove_stored_attachment, resolve_attachment_path, rules_dir, store_attachment,
-    store_attachment_bytes, write_handoff_file, Iso4217, Ledger, ProcessOptions, TxUpdate,
-    LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
+    store_attachment_bytes, write_handoff_file, BudgetBook, Iso4217, Ledger, ProcessOptions,
+    TxFilter, TxUpdate, LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
 };
 use rradar_ocr::engine_by_name;
 use serde::Serialize;
@@ -81,6 +81,8 @@ pub fn capabilities_json() -> String {
         backup_includes_attachments: bool,
         capture_oneshot: bool,
         engine_auto: bool,
+        tag_filter: bool,
+        local_budgets: bool,
         notes: &'static str,
     }
     serde_json::to_string(&Caps {
@@ -98,6 +100,8 @@ pub fn capabilities_json() -> String {
         backup_includes_attachments: true,
         capture_oneshot: true,
         engine_auto: true,
+        tag_filter: true,
+        local_budgets: true,
         notes: "local-first; multi-device via backup/handoff file only",
     })
     .unwrap_or_else(|_| "{}".into())
@@ -470,6 +474,96 @@ pub fn list_transactions_json(
             .map_err(|e| e.to_string())?;
         serde_json::to_string(&rows).map_err(|e| e.to_string())
     })
+}
+
+/// Query transactions with optional tag / category / text filters (JSON array).
+///
+/// `filter_json` keys (all optional): limit, offset, currency, query, tag, category,
+/// year_month, from, to, min_minor, max_minor, has_attachment.
+pub fn query_transactions_json(
+    db_path: String,
+    passphrase: Option<String>,
+    filter_json: String,
+) -> Result<String, String> {
+    #[derive(serde::Deserialize, Default)]
+    struct F {
+        limit: Option<u32>,
+        offset: Option<u32>,
+        currency: Option<String>,
+        query: Option<String>,
+        tag: Option<String>,
+        category: Option<String>,
+        year_month: Option<String>,
+        from: Option<String>,
+        to: Option<String>,
+        min_minor: Option<i64>,
+        max_minor: Option<i64>,
+        has_attachment: Option<bool>,
+    }
+    let f: F = if filter_json.trim().is_empty() {
+        F::default()
+    } else {
+        serde_json::from_str(&filter_json).map_err(|e| e.to_string())?
+    };
+    let filter = TxFilter {
+        limit: f.limit.unwrap_or(50) as usize,
+        offset: f.offset.unwrap_or(0) as usize,
+        currency: f.currency,
+        query: f.query,
+        tag: f.tag,
+        category: f.category,
+        year_month: f.year_month,
+        from: f.from,
+        to: f.to,
+        min_minor: f.min_minor,
+        max_minor: f.max_minor,
+        has_attachment: f.has_attachment,
+    };
+    with_ledger(&db_path, passphrase.as_deref(), |ledger| {
+        let rows = ledger
+            .query_transactions(&filter)
+            .map_err(|e| e.to_string())?;
+        serde_json::to_string(&rows).map_err(|e| e.to_string())
+    })
+}
+
+/// Distinct tags as JSON string array.
+pub fn list_tags_json(db_path: String, passphrase: Option<String>) -> Result<String, String> {
+    with_ledger(&db_path, passphrase.as_deref(), |ledger| {
+        let tags = ledger.list_tags().map_err(|e| e.to_string())?;
+        serde_json::to_string(&tags).map_err(|e| e.to_string())
+    })
+}
+
+/// Budget book from data dir as JSON.
+pub fn budgets_json() -> String {
+    serde_json::to_string(&BudgetBook::load()).unwrap_or_else(|_| r#"{"lines":[]}"#.into())
+}
+
+/// Evaluate budgets for a calendar month against a ledger.
+pub fn budget_status_json(
+    db_path: String,
+    passphrase: Option<String>,
+    year: i32,
+    month: u32,
+) -> Result<String, String> {
+    let book = BudgetBook::load();
+    with_ledger(&db_path, passphrase.as_deref(), |ledger| {
+        let st = budget_status_month(ledger, &book, year, month).map_err(|e| e.to_string())?;
+        serde_json::to_string(&st).map_err(|e| e.to_string())
+    })
+}
+
+/// Upsert a budget line (major units string). category empty = overall monthly.
+pub fn budget_set_json(
+    currency: String,
+    major: String,
+    category: Option<String>,
+) -> Result<String, String> {
+    let mut book = BudgetBook::load();
+    book.set_major(&currency, &major, category.as_deref())?;
+    book.save().map_err(|e| e.to_string())?;
+    serde_json::to_string(&book).map_err(|e| e.to_string())
 }
 
 /// Get one transaction by id as JSON.
