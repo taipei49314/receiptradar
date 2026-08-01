@@ -6,15 +6,31 @@ One-command closed loop for GIF / launch video / CI. **No cloud. No account.**
 
 ```bash
 # From repo root
+rradar fixtures list      # matrix size / classes
+rradar fixtures verify    # offline extract totals
 rradar demo
 # Quiet (CI):
 rradar demo --quiet
+# Guided recording (Windows):
+#   powershell -File scripts/record-demo.ps1
 ```
+
+### Fixture matrix (Cycle 31+)
+
+| Class | Count (approx) | Examples |
+|-------|----------------|----------|
+| text | 17 | 全家, 7-11, OK, 家樂福, 高鐵, 鼎泰豐, ibon, … |
+| mock_ocr | 5 | familymart, 7-11, mcdonalds, carrefour, starbucks USD |
+| image+sidecar | 2 | familymart_photo, seven_eleven_photo |
+| qr | 3 | TW e-invoice left-QR samples |
+
+Index: `fixtures/manifest.json`.
 
 ### What viewers should see
 
 | Beat | Demo step | Talk track |
 |------|-----------|------------|
+| 0 | fixtures list/verify | Offline matrix is the product proof |
 | 1 | text fixtures | Everyday Taiwan receipts → structured draft |
 | 2 | mock_ocr bins | Pixel path without shipping weights |
 | 3–4 | attach + tags | Schema v3 local blobs next to the ledger |
@@ -23,9 +39,9 @@ rradar demo --quiet
 | 6+ | soft budget | Local monthly limit; **never** mix currencies |
 | 7–8 | stats + export | Per-currency totals only |
 | 9 | backup.rradar | Multi-device = **file you carry** |
-| 10 | monthly report | Markdown + Budgets section |
-| 11 | model pins | True OCR optional, hash-pinned |
-| 12 | local API smoke | Loopback HTTP product surface |
+| 10 | monthly + annual report | Markdown + Budgets + year close |
+| 11–12 | model pins / aliases | True OCR optional; local renames |
+| 13 | local API smoke | Loopback HTTP product surface |
 
 Exit line: `DEMO_OK n=…`
 

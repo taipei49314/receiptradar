@@ -24,6 +24,15 @@ smoke:
 demo:
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts/demo.ps1
 
+fixtures:
+    cargo run -q -p rradar-cli -- fixtures list --fixtures fixtures
+
+fixtures-verify:
+    cargo run -q -p rradar-cli -- fixtures verify --fixtures fixtures
+
+record-demo:
+    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/record-demo.ps1
+
 # Ephemeral loopback HTTP product smoke (no curl)
 api-smoke:
     cargo run -q -p rradar-cli -- api-smoke --fixtures fixtures

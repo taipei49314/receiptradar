@@ -26,6 +26,14 @@ rradar process fixtures/images/familymart_photo.png --explain
 powershell -File scripts/smoke-onnx.ps1
 ```
 
+## Matrix index
+
+```bash
+rradar fixtures list              # table from manifest.json
+rradar fixtures verify            # process each entry; check totals
+rradar fixtures list --json
+```
+
 ## One-click demo
 
 ```bash
@@ -35,6 +43,8 @@ cargo run -p rradar-cli -- demo
 powershell -File scripts/demo.ps1
 # or
 ./scripts/demo.sh
+# Guided terminal GIF narrative:
+powershell -File scripts/record-demo.ps1
 ```
 
 ## CLI samples

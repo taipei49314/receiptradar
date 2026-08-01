@@ -14,6 +14,7 @@
 - Local HTTP API expanded for product demo automation (capabilities, paths, attach, process flags)
 
 ### Added
+- **Recordable fixture matrix (axis #5):** +6 TW text fixtures (家樂福/OK/高鐵/康是美/鼎泰豐/ibon), +3 mock_ocr, +1 image sidecar; `rradar fixtures list|verify`; `scripts/record-demo.ps1`; demo processes all sidecar images
 - **Year analytics + merchant aliases (axis #2):** `stats --year`, `report --year` annual markdown; `rradar aliases`; backup packs `merchant_aliases.toml`; FFI `report_year_markdown` / `aliases_json`
 - **Mobile FFI parity (axis #3):** Dart query/tags/budget/engines API; Budget screen + ledger tag filter; `docs/frb-contract.md` FRB generate checklist
 - **Supply-chain / release trust (axis #4):** `tools/supply-chain/check_deps.py` (forbidden license gate + inventory); `rradar licenses`; CI supply-chain step; `docs/SUPPLY-CHAIN.md`; release-check verifies LICENSE + THIRD_PARTY_NOTICES

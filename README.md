@@ -20,9 +20,11 @@ Cross-platform install: **[docs/INSTALL.md](./docs/INSTALL.md)** (source, GitHub
 cargo install --path crates/rradar-cli --locked
 rradar version --long
 # From repo root — full closed loop (parse → ledger → stats → export → backup)
+rradar fixtures verify   # offline matrix totals
 rradar demo
-# Windows helper:
+# Windows helper / GIF narrative:
 #   powershell -File scripts/demo.ps1
+#   powershell -File scripts/record-demo.ps1
 # Binary from latest GitHub Release:
 #   ./scripts/install-from-release.sh
 #   powershell -File scripts/install-from-release.ps1

@@ -1,22 +1,31 @@
 {
   "schema_version": 1,
-  "note": "Text fixtures for metric (a); mock_ocr binaries; images with sidecar for pixel path (CI); receipt_en_total89.png is for optional ONNX smoke (scripts/smoke-onnx.*). Real photo e2e matrix is PR-A11 under PII policy.",
+  "note": "Text fixtures for metric (a); mock_ocr binaries; images with sidecar for pixel path (CI); receipt_en_total89.png is for optional ONNX smoke (scripts/smoke-onnx.*). Real photo e2e matrix is PR-A11 under PII policy. Expanded matrix Cycle 31 for recordable demo.",
   "text_fixtures": [
     { "path": "text/familymart_89.txt", "class": "tw_convenience", "expect_total_minor": 8900, "expect_currency": "TWD", "demo": true },
     { "path": "text/seven_eleven_tw.txt", "class": "tw_convenience", "expect_total_minor": 4500, "expect_currency": "TWD", "demo": true },
     { "path": "text/hilife_tw.txt", "class": "tw_convenience", "expect_total_minor": 6200, "expect_currency": "TWD", "demo": true },
+    { "path": "text/okmart_tw.txt", "class": "tw_convenience", "expect_total_minor": 7800, "expect_currency": "TWD", "demo": true },
     { "path": "text/starbucks_usd.txt", "class": "en_cafe", "expect_total_minor": 545, "expect_currency": "USD", "demo": true },
     { "path": "text/mrt_taipei.txt", "class": "tw_transport", "expect_total_minor": 2500, "expect_currency": "TWD", "demo": true },
+    { "path": "text/thsrc_tw.txt", "class": "tw_transport", "expect_total_minor": 149000, "expect_currency": "TWD", "demo": true },
     { "path": "text/kfc_tw.txt", "class": "tw_food", "expect_total_minor": 19900, "expect_currency": "TWD", "demo": true },
     { "path": "text/mcdonalds_tw.txt", "class": "tw_food", "expect_total_minor": 16800, "expect_currency": "TWD", "demo": true },
+    { "path": "text/dintaifung_tw.txt", "class": "tw_food", "expect_total_minor": 128000, "expect_currency": "TWD", "demo": true },
     { "path": "text/pxmart.txt", "class": "tw_grocery", "expect_total_minor": 35600, "expect_currency": "TWD", "demo": true },
+    { "path": "text/carrefour_tw.txt", "class": "tw_grocery", "expect_total_minor": 128000, "expect_currency": "TWD", "demo": true },
     { "path": "text/costco_tw.txt", "class": "tw_warehouse", "expect_total_minor": 128000, "expect_currency": "TWD", "demo": true },
     { "path": "text/watsons_tw.txt", "class": "tw_health", "expect_total_minor": 39900, "expect_currency": "TWD", "demo": true },
-    { "path": "text/cpc_gas_tw.txt", "class": "tw_fuel", "expect_total_minor": 65000, "expect_currency": "TWD", "demo": true }
+    { "path": "text/cosmed_tw.txt", "class": "tw_health", "expect_total_minor": 25900, "expect_currency": "TWD", "demo": true },
+    { "path": "text/cpc_gas_tw.txt", "class": "tw_fuel", "expect_total_minor": 65000, "expect_currency": "TWD", "demo": true },
+    { "path": "text/ibon_print_tw.txt", "class": "tw_service", "expect_total_minor": 3500, "expect_currency": "TWD", "demo": true }
   ],
   "mock_ocr_fixtures": [
     { "path": "mock_ocr/familymart_mock.bin", "class": "mock_image_path", "expect_total_minor": 8900, "expect_currency": "TWD", "demo": true },
-    { "path": "mock_ocr/starbucks_mock.bin", "class": "mock_image_path", "expect_total_minor": 545, "expect_currency": "USD", "demo": true }
+    { "path": "mock_ocr/starbucks_mock.bin", "class": "mock_image_path", "expect_total_minor": 545, "expect_currency": "USD", "demo": true },
+    { "path": "mock_ocr/seven_eleven_mock.bin", "class": "mock_image_path", "expect_total_minor": 4500, "expect_currency": "TWD", "demo": true },
+    { "path": "mock_ocr/mcdonalds_mock.bin", "class": "mock_image_path", "expect_total_minor": 16800, "expect_currency": "TWD", "demo": true },
+    { "path": "mock_ocr/carrefour_mock.bin", "class": "mock_image_path", "expect_total_minor": 128000, "expect_currency": "TWD", "demo": true }
   ],
   "image_sidecar_fixtures": [
     {
@@ -24,6 +33,14 @@
       "sidecar": "images/familymart_photo.png.ocr.txt",
       "class": "pixel_path_with_sidecar",
       "expect_total_minor": 8900,
+      "expect_currency": "TWD",
+      "demo": true
+    },
+    {
+      "path": "images/seven_eleven_photo.png",
+      "sidecar": "images/seven_eleven_photo.png.ocr.txt",
+      "class": "pixel_path_with_sidecar",
+      "expect_total_minor": 4500,
       "expect_currency": "TWD",
       "demo": true
     }

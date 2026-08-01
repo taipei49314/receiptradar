@@ -479,10 +479,34 @@ Tag: v0.1.0-cli.11
 | P2 | More TW fixtures / showcase GIF |
 | P3 | cargo-deny optional dual gate |
 
+## Cycle 31 — recordable fixture matrix expansion (main axis #5)
+
+### Plan
+1. Expand text / mock_ocr / image-sidecar matrix (TW grocery, rail, dining, ibon)
+2. `rradar fixtures list|verify` over `fixtures/manifest.json`
+3. `scripts/record-demo.ps1` guided GIF narrative; demo all sidecars
+4. docs demo-showcase / fixtures README
+
+### Verify
+- `cargo test --workspace --locked` golden fixtures green  
+- `rradar fixtures verify` → FIXTURES_VERIFY ok  
+- clippy green
+
+### Result
+- Demo set is multi-category and machine-verifiable offline  
+
+### Next seeds
+| Priority | Item |
+|----------|------|
+| P1 | FRB when Flutter present |
+| P2 | cargo-deny dual gate optional |
+| P3 | Device A04 when Android available |
+
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
 - Green tests before re-plan  
 - Non-goals: official sync, GPT wrapper  
+
 
 
 

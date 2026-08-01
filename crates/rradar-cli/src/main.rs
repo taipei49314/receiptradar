@@ -43,6 +43,7 @@ fn main() -> ExitCode {
         "licenses" | "notices" => cmd_licenses(&args[1..]),
         "release-check" | "self-check" => cmd_release_check(&args[1..]),
         "demo" => cmd_demo(&args[1..]),
+        "fixtures" => cmd_fixtures(&args[1..]),
         "process" | "add" => cmd_process(&args[1..]),
         "manual" | "entry" => cmd_manual(&args[1..]),
         "import" => cmd_import(&args[1..]),
@@ -694,41 +695,56 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
     }
 
     step(3, "pixel path image + .ocr.txt sidecar (CI-safe)");
-    let img_sidecar = fixtures.join("images/familymart_photo.png");
     let mut sidecar_tx_id: Option<String> = None;
-    if img_sidecar.is_file() {
-        let draft = process_path(
-            &img_sidecar,
-            eng.as_ref(),
-            &categories,
-            ProcessOptions {
-                default_currency: Iso4217::TWD,
-                ..Default::default()
-            },
-        )
-        .map_err(|e| format!("{}: {e}", img_sidecar.display()))?;
-        let hash =
-            rradar_core::preprocess::content_hash(&std::fs::read(&img_sidecar).unwrap_or_default());
-        let res = ledger
-            .confirm_draft(&draft, Some(&hash), Some("demo image sidecar"), false)
-            .map_err(|e| e.to_string())?;
-        if res.inserted {
-            confirmed += 1;
-            sidecar_tx_id = Some(res.transaction.id.clone());
-        }
+    let mut img_paths = collect_glob(&fixtures.join("images"), &["png"]);
+    img_paths.sort();
+    // Prefer sidecar-backed photos (skip synthetic ONNX-only images without .ocr.txt).
+    img_paths.retain(|p| {
+        let side = PathBuf::from(format!("{}.ocr.txt", p.display()));
+        side.is_file()
+    });
+    if img_paths.is_empty() {
         if !quiet {
-            println!(
-                "  ✓ {:<28}  {} (sidecar OCR text)",
-                img_sidecar
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("?"),
-                draft.merchant.value
-            );
+            println!("  (skip — no image+sidecar fixtures)");
         }
-    } else if !quiet {
-        println!("  (skip — fixtures/images not present)");
+    } else {
+        for img_sidecar in &img_paths {
+            let draft = process_path(
+                img_sidecar,
+                eng.as_ref(),
+                &categories,
+                ProcessOptions {
+                    default_currency: Iso4217::TWD,
+                    ..Default::default()
+                },
+            )
+            .map_err(|e| format!("{}: {e}", img_sidecar.display()))?;
+            let hash = rradar_core::preprocess::content_hash(
+                &std::fs::read(img_sidecar).unwrap_or_default(),
+            );
+            let res = ledger
+                .confirm_draft(&draft, Some(&hash), Some("demo image sidecar"), false)
+                .map_err(|e| e.to_string())?;
+            if res.inserted {
+                confirmed += 1;
+                if sidecar_tx_id.is_none() {
+                    sidecar_tx_id = Some(res.transaction.id.clone());
+                }
+            }
+            if !quiet {
+                println!(
+                    "  ✓ {:<28}  {} (sidecar OCR text)",
+                    img_sidecar
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("?"),
+                    draft.merchant.value
+                );
+            }
+        }
     }
+    // Attach first sidecar image as receipt blob when available.
+    let img_sidecar = img_paths.first().cloned().unwrap_or_default();
 
     step(4, "attach receipt blob + tags (schema v3 local store)");
     if let Some(ref tid) = sidecar_tx_id {
@@ -1030,6 +1046,222 @@ fn find_fixtures_dir() -> PathBuf {
         }
     }
     PathBuf::from("fixtures")
+}
+
+/// List / verify the recordable fixture matrix from fixtures/manifest.json.
+fn cmd_fixtures(args: &[String]) -> Result<(), String> {
+    let mut verify = false;
+    let mut json = false;
+    let mut root: Option<PathBuf> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "verify" | "--verify" => verify = true,
+            "list" => {}
+            "--json" => json = true,
+            "--fixtures" | "--root" => {
+                i += 1;
+                root = Some(PathBuf::from(args.get(i).ok_or("needs path")?));
+            }
+            "--help" | "-h" => {
+                println!(
+                    "rradar fixtures [list|verify] [--fixtures DIR] [--json]\n  \
+                     Index the demo matrix (text / mock_ocr / image sidecar / qr).\n  \
+                     verify: process each entry and check expect_total_minor."
+                );
+                return Ok(());
+            }
+            other if !other.starts_with('-') => {
+                return Err(format!("unknown fixtures subcommand `{other}`"));
+            }
+            other => return Err(format!("unknown flag `{other}`")),
+        }
+        i += 1;
+    }
+
+    let fixtures = root.unwrap_or_else(find_fixtures_dir);
+    let man_path = fixtures.join("manifest.json");
+    if !man_path.is_file() {
+        return Err(format!(
+            "manifest not found at {} — run from repo root or pass --fixtures",
+            man_path.display()
+        ));
+    }
+    let raw = std::fs::read_to_string(&man_path).map_err(|e| e.to_string())?;
+    let man: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+
+    #[derive(Clone)]
+    struct Row {
+        kind: String,
+        path: String,
+        expect_minor: Option<i64>,
+        currency: String,
+        demo: bool,
+    }
+    let mut rows: Vec<Row> = Vec::new();
+    let take = |kind: &str, arr: Option<&Vec<serde_json::Value>>| {
+        let mut out = Vec::new();
+        if let Some(a) = arr {
+            for v in a {
+                out.push(Row {
+                    kind: kind.into(),
+                    path: v
+                        .get("path")
+                        .and_then(|p| p.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    expect_minor: v.get("expect_total_minor").and_then(|x| x.as_i64()),
+                    currency: v
+                        .get("expect_currency")
+                        .and_then(|c| c.as_str())
+                        .unwrap_or("TWD")
+                        .to_string(),
+                    demo: v.get("demo").and_then(|d| d.as_bool()).unwrap_or(false),
+                });
+            }
+        }
+        out
+    };
+    rows.extend(take(
+        "text",
+        man.get("text_fixtures").and_then(|v| v.as_array()),
+    ));
+    rows.extend(take(
+        "mock_ocr",
+        man.get("mock_ocr_fixtures").and_then(|v| v.as_array()),
+    ));
+    rows.extend(take(
+        "image_sidecar",
+        man.get("image_sidecar_fixtures").and_then(|v| v.as_array()),
+    ));
+    if let Some(qr) = man.get("qr_fixtures").and_then(|v| v.as_array()) {
+        for v in qr {
+            rows.push(Row {
+                kind: "qr".into(),
+                path: v
+                    .get("path")
+                    .and_then(|p| p.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                expect_minor: None,
+                currency: "TWD".into(),
+                demo: v.get("demo").and_then(|d| d.as_bool()).unwrap_or(false),
+            });
+        }
+    }
+
+    if json && !verify {
+        println!(
+            "{}",
+            serde_json::json!({
+                "root": fixtures.display().to_string(),
+                "count": rows.len(),
+                "entries": rows.iter().map(|r| serde_json::json!({
+                    "kind": r.kind,
+                    "path": r.path,
+                    "expect_total_minor": r.expect_minor,
+                    "currency": r.currency,
+                    "demo": r.demo,
+                })).collect::<Vec<_>>()
+            })
+        );
+        return Ok(());
+    }
+
+    if !verify {
+        println!(
+            "rradar fixtures | root={} | n={}",
+            fixtures.display(),
+            rows.len()
+        );
+        println!("kind          | demo | expect      | path");
+        for r in &rows {
+            let exp = r
+                .expect_minor
+                .map(|m| format!("{:>8} {}", m, r.currency))
+                .unwrap_or_else(|| "         -".into());
+            println!(
+                "{:<13} | {:<4} | {} | {}",
+                r.kind,
+                if r.demo { "yes" } else { "no" },
+                exp,
+                r.path
+            );
+        }
+        println!("hint | rradar fixtures verify   # process + check totals");
+        println!("hint | rradar demo              # full closed-loop uses this matrix");
+        return Ok(());
+    }
+
+    // verify
+    let eng = engine_by_name("mock").map_err(|e| e.to_string())?;
+    let cats = category_engine_with_packs();
+    let mut ok_n = 0usize;
+    let mut fail_n = 0usize;
+    let mut skip_n = 0usize;
+    println!("rradar fixtures verify | root={}", fixtures.display());
+    for r in &rows {
+        if r.kind == "qr" {
+            let p = fixtures.join(&r.path);
+            if p.is_file() {
+                ok_n += 1;
+                println!("  OK   | qr payload present | {}", r.path);
+            } else {
+                fail_n += 1;
+                println!("  FAIL | qr missing | {}", r.path);
+            }
+            continue;
+        }
+        let Some(expect) = r.expect_minor else {
+            skip_n += 1;
+            println!("  skip | no expect | {}", r.path);
+            continue;
+        };
+        let path = fixtures.join(&r.path);
+        if !path.is_file() {
+            fail_n += 1;
+            println!("  FAIL | missing file | {}", r.path);
+            continue;
+        }
+        let currency = Iso4217::parse(&r.currency).unwrap_or(Iso4217::TWD);
+        match process_path(
+            &path,
+            eng.as_ref(),
+            &cats,
+            ProcessOptions {
+                default_currency: currency,
+                ..Default::default()
+            },
+        ) {
+            Ok(d) => {
+                if d.total.value.amount_minor == expect
+                    && d.total.value.currency.to_string() == r.currency
+                {
+                    ok_n += 1;
+                    println!("  OK   | {:>8} {} | {}", expect, r.currency, r.path);
+                } else {
+                    fail_n += 1;
+                    println!(
+                        "  FAIL | got {} {} want {} {} | {}",
+                        d.total.value.amount_minor,
+                        d.total.value.currency,
+                        expect,
+                        r.currency,
+                        r.path
+                    );
+                }
+            }
+            Err(e) => {
+                fail_n += 1;
+                println!("  FAIL | {e} | {}", r.path);
+            }
+        }
+    }
+    println!("FIXTURES_VERIFY ok={ok_n} fail={fail_n} skip={skip_n}");
+    if fail_n > 0 {
+        return Err(format!("fixtures verify failed ({fail_n})"));
+    }
+    Ok(())
 }
 
 /// Locate a repo-root file when cwd is repo root or a crate dir.
@@ -3670,6 +3902,7 @@ Commands:
   licenses             THIRD_PARTY_NOTICES + Apache-2.0 policy (alias: notices)
   release-check        Pre-flight install/release gate (alias: self-check)
   demo                 One-command closed-loop demo (fixtures → ledger)
+  fixtures             List/verify demo fixture matrix
   path                 Print default home & db paths
   process <files…>     Parse receipt(s) (alias: add); batch OK
   manual               Manual entry without OCR (alias: entry)
