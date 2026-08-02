@@ -661,6 +661,29 @@ Tag: v0.1.0-cli.11
 | P2 | Device A04 when Android available |
 | P3 | Optional signed provenance / SBOM later |
 
+## Cycle 39 — fix release workflow YAML + VERSION script (main axis #4)
+
+### Plan
+1. Diagnose tag `v0.1.0-cli.31` release failure: invalid `release.yml` (unindented python broke YAML)
+2. `scripts/write-release-version.py` — generate VERSION/version.json from binary JSON
+3. Rewrite release package steps to call the script; schema ≥4 assert in smoke
+4. Ship tag so GitHub Release assets publish again
+
+### Verify
+- `python -c "yaml.safe_load(release.yml)"` ok
+- `cargo test --workspace --locked` / clippy green
+- script dry-run writes ledger_schema=4
+
+### Result
+- Release pipeline unblocked; VERSION never hardcodes schema again
+
+### Next seeds
+| Priority | Item |
+|----------|------|
+| P1 | FRB when Flutter present |
+| P2 | Device A04 when Android available |
+| P3 | Orphan attachment GC on purge |
+
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
 - Green tests before re-plan  

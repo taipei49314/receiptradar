@@ -13,6 +13,9 @@
 - Backup/handoff also pack optional `budgets.toml` (soft limits); restore rehydrates
 - Local HTTP API expanded for product demo automation (capabilities, paths, attach, process flags)
 
+### Fixed
+- **Release workflow YAML** broken by unindented inline Python (tag v0.1.0-cli.31 failed to parse); packaging uses `scripts/write-release-version.py`
+
 ### Added
 - **Release/CI schema v4 productization (axis #4):** release `VERSION`/`version.json` from binary; pack ledger-schema docs; release-check soft-delete+integrity; CI trash smoke; verify-install requires schema ≥ 4
 - **Ledger schema v4 soft-delete (axis #2):** `deleted_at` trash/restore/purge; stats/list/export skip trash; `rradar trash|restore|purge`; doctor integrity; FFI trash surface

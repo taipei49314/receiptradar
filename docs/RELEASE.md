@@ -76,7 +76,16 @@ git push origin v0.1.0-cli.N
 
 ### Release archives
 
-`VERSION` / `version.json` are written from **`rradar version --json`** at package time (ledger_schema must match the binary; never hardcode). Includes `docs/ledger-schema.md`.
+`VERSION` / `version.json` are written at package time by
+`scripts/write-release-version.py` from **`rradar version --json`**
+(ledger_schema must match the binary; never hardcode). Includes `docs/ledger-schema.md`.
+
+```bash
+# local dry-run of VERSION generation
+cargo build -p rradar-cli --release --locked
+./target/release/rradar version --json > /tmp/vj.json
+python3 scripts/write-release-version.py --stage /tmp/rradar-stage --tag local --version-json /tmp/vj.json
+```
 
 ## Install from release
 

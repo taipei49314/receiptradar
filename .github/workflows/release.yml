@@ -38,14 +38,15 @@ jobs:
       - name: Smoke binary
         shell: bash
         run: |
+          set -euo pipefail
           if [[ -f target/release/rradar.exe ]]; then B=target/release/rradar.exe; else B=target/release/rradar; fi
           "$B" version --long
-          "$B" version --json
+          "$B" version --json | tee /tmp/rradar-version.json
           "$B" engines
           "$B" release-check --fixtures fixtures --quiet
           "$B" help >/dev/null
           # schema v4 soft-delete must be in this binary
-          "$B" version --json | grep -E '"ledger_schema":\s*4' || "$B" version --json | grep '"ledger_schema":4'
+          python3 -c "import json; d=json.load(open('/tmp/rradar-version.json')); assert int(d.get('ledger_schema',0))>=4, d"
 
       - name: Package (unix)
         if: runner.os != 'Windows'
@@ -65,26 +66,12 @@ jobs:
           cp docs/privacy.md "$STAGE/" 2>/dev/null || true
           cp docs/ledger-schema.md "$STAGE/" 2>/dev/null || true
           cp docs/RELEASE.md "$STAGE/" 2>/dev/null || true
-          # VERSION + version.json derived from the binary (never hardcode schema)
+          # VERSION + version.json from binary (never hardcode schema)
           "$B" version --json > "$STAGE/version.json"
-          python3 -c "
-import json
-stage = '''${{ matrix.artifact }}'''
-tag = '''${{ github.ref_name }}'''
-d = json.load(open(f'{stage}/version.json'))
-lines = [
-    f'tag={tag}',
-    f\"product={d.get('product_id', 'receiptradar')}\",
-    f\"crate_version={d.get('version', '')}\",
-    f\"ledger_schema={d.get('ledger_schema', '')}\",
-    f\"soft_delete={str(d.get('soft_delete', False)).lower()}\",
-    f\"policy={d.get('policy', 'local-first; no official cloud relay')}\",
-    'onnx_weights=not_bundled',
-    'archive_docs=LICENSE,README,INSTALL,cli,privacy,ledger-schema,RELEASE,CHANGELOG,THIRD_PARTY_NOTICES',
-]
-open(f'{stage}/VERSION', 'w', encoding='utf-8').write('\n'.join(lines) + '\n')
-print(open(f'{stage}/VERSION').read())
-"
+          python3 scripts/write-release-version.py \
+            --stage "$STAGE" \
+            --tag "${{ github.ref_name }}" \
+            --version-json "$STAGE/version.json"
           tar -czf "${STAGE}.tar.gz" "$STAGE"
           shasum -a 256 "${STAGE}.tar.gz" | tee "${STAGE}.sha256"
 
@@ -92,6 +79,7 @@ print(open(f'{stage}/VERSION').read())
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           $stage = "${{ matrix.artifact }}"
           $B = "target/release/rradar.exe"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
@@ -106,19 +94,9 @@ print(open(f'{stage}/VERSION').read())
           if (Test-Path docs/ledger-schema.md) { Copy-Item docs/ledger-schema.md "$stage/" }
           if (Test-Path docs/RELEASE.md) { Copy-Item docs/RELEASE.md "$stage/" }
           $jsonPath = Join-Path $stage "version.json"
-          & $B version --json | Set-Content -Path $jsonPath -Encoding utf8
-          $vj = Get-Content $jsonPath -Raw | ConvertFrom-Json
-          @(
-            "tag=${{ github.ref_name }}"
-            "product=$($vj.product_id)"
-            "crate_version=$($vj.version)"
-            "ledger_schema=$($vj.ledger_schema)"
-            ("soft_delete=" + ([string]$vj.soft_delete).ToLower())
-            "policy=$($vj.policy)"
-            "onnx_weights=not_bundled"
-            "archive_docs=LICENSE,README,INSTALL,cli,privacy,ledger-schema,RELEASE,CHANGELOG,THIRD_PARTY_NOTICES"
-          ) | Set-Content -Path "$stage/VERSION" -Encoding utf8
-          Get-Content "$stage/VERSION"
+          & $B version --json | Out-File -FilePath $jsonPath -Encoding utf8
+          python scripts/write-release-version.py --stage $stage --tag "${{ github.ref_name }}" --version-json $jsonPath
+          Get-Content (Join-Path $stage "VERSION")
           Compress-Archive -Path $stage -DestinationPath "$stage.zip" -Force
           $hash = (Get-FileHash "$stage.zip" -Algorithm SHA256).Hash.ToLower()
           Set-Content -Path "$stage.sha256" -Value "$hash  $stage.zip"
