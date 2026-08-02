@@ -696,11 +696,14 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
         }
     }
 
-    step(3, "pixel path image + .ocr.txt sidecar (CI-safe)");
+    step(
+        3,
+        "synthetic photo + .ocr.txt sidecar (CI-safe; ONNX-capable pixels)",
+    );
     let mut sidecar_tx_id: Option<String> = None;
     let mut img_paths = collect_glob(&fixtures.join("images"), &["png"]);
     img_paths.sort();
-    // Prefer sidecar-backed photos (skip synthetic ONNX-only images without .ocr.txt).
+    // Prefer sidecar-backed photos (skip pure ONNX-only images without .ocr.txt).
     img_paths.retain(|p| {
         let side = PathBuf::from(format!("{}.ocr.txt", p.display()));
         side.is_file()
@@ -711,19 +714,18 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
         }
     } else {
         for img_sidecar in &img_paths {
+            let currency = currency_hint_for_path(img_sidecar);
             let draft = process_path(
                 img_sidecar,
                 eng.as_ref(),
                 &categories,
                 ProcessOptions {
-                    default_currency: Iso4217::TWD,
+                    default_currency: currency,
                     ..Default::default()
                 },
             )
             .map_err(|e| format!("{}: {e}", img_sidecar.display()))?;
-            let hash = rradar_core::preprocess::content_hash(
-                &std::fs::read(img_sidecar).unwrap_or_default(),
-            );
+            let hash = rradar_core::content_hash(&std::fs::read(img_sidecar).unwrap_or_default());
             let res = ledger
                 .confirm_draft(&draft, Some(&hash), Some("demo image sidecar"), false)
                 .map_err(|e| e.to_string())?;
@@ -735,11 +737,12 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
             }
             if !quiet {
                 println!(
-                    "  ✓ {:<28}  {} (sidecar OCR text)",
+                    "  ✓ {:<28}  {} {} (synthetic PNG + sidecar)",
                     img_sidecar
                         .file_name()
                         .and_then(|s| s.to_str())
                         .unwrap_or("?"),
+                    draft.total.value.currency,
                     draft.merchant.value
                 );
             }
@@ -893,26 +896,42 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
     let json_path = out_dir.join("demo-export.json");
     let csv = transactions_to_csv(&all).map_err(|e| e.to_string())?;
     let json = transactions_to_json(&all).map_err(|e| e.to_string())?;
-    std::fs::write(&csv_path, csv).map_err(|e| e.to_string())?;
-    std::fs::write(&json_path, json).map_err(|e| e.to_string())?;
+    std::fs::write(&csv_path, &csv).map_err(|e| e.to_string())?;
+    std::fs::write(&json_path, &json).map_err(|e| e.to_string())?;
     if !quiet {
         println!("  csv  | {}", csv_path.display());
         println!("  json | {}", json_path.display());
     }
 
+    step(9, "multi-device file import (CSV + backup merge; no cloud)");
+    // Round-trip: export CSV → empty ledger import; backup → second empty ledger merge.
+    let import_db = out_dir.join("demo-import.db");
+    if import_db.is_file() {
+        let _ = std::fs::remove_file(&import_db);
+    }
+    let import_ledger = rradar_core::Ledger::open(&import_db).map_err(|e| e.to_string())?;
+    let csv_rows = transactions_from_csv(&csv).map_err(|e| e.to_string())?;
+    let (csv_ins, csv_skip) = import_ledger
+        .import_transactions(&csv_rows)
+        .map_err(|e| e.to_string())?;
+    if !quiet {
+        println!(
+            "  ✓ import csv → {}  inserted={csv_ins} skipped={csv_skip} (local-only)",
+            import_db.display()
+        );
+    }
+
+    let bak = out_dir.join("demo-backup.rradar");
     if !skip_backup {
-        step(9, "encrypted backup.rradar (+ attachment blobs)");
-        // Demo passphrase is intentionally public; real users choose their own.
-        let bak = out_dir.join("demo-backup.rradar");
         let bytes = create_backup(
             &ledger,
             "demo-passphrase",
             8, /* fast Argon2 for demo */
         )
         .map_err(|e| e.to_string())?;
-        std::fs::write(&bak, bytes).map_err(|e| e.to_string())?;
+        std::fs::write(&bak, &bytes).map_err(|e| e.to_string())?;
         if !quiet {
-            match inspect_backup("demo-passphrase", &std::fs::read(&bak).unwrap_or_default()) {
+            match inspect_backup("demo-passphrase", &bytes) {
                 Ok(info) => println!(
                     "  backup | {}  attachments={}  (passphrase: demo-passphrase)",
                     bak.display(),
@@ -924,6 +943,27 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
                 ),
             }
         }
+        let merge_db = out_dir.join("demo-merge.db");
+        if merge_db.is_file() {
+            let _ = std::fs::remove_file(&merge_db);
+        }
+        let merge_ledger = rradar_core::Ledger::open(&merge_db).map_err(|e| e.to_string())?;
+        let restored = restore_backup("demo-passphrase", &bytes).map_err(|e| e.to_string())?;
+        let bak_rows = transactions_from_backup(&restored).map_err(|e| e.to_string())?;
+        let (m_ins, m_skip) = merge_ledger
+            .import_transactions(&bak_rows)
+            .map_err(|e| e.to_string())?;
+        let att_n = write_restored_attachments(merge_ledger.path(), &restored)
+            .map_err(|e| e.to_string())?;
+        if !quiet {
+            println!(
+                "  ✓ backup merge → {}  inserted={m_ins} skipped={m_skip} attachments={att_n}",
+                merge_db.display()
+            );
+            println!("  policy | multi-device = encrypted file you copy — no official relay");
+        }
+    } else if !quiet {
+        println!("  (skip backup merge — --no-backup)");
     }
 
     step(10, "monthly markdown report (+ budgets section)");
@@ -1027,6 +1067,7 @@ fn cmd_demo(args: &[String]) -> Result<(), String> {
         );
         println!("      rradar api-smoke --fixtures fixtures");
         println!("      powershell -File scripts/smoke-onnx.ps1  # optional real ONNX e2e");
+        println!("      cargo run -p gen-receipt-png -- fixtures/images  # regen synthetic PNGs");
         println!("Record tip: capture this command output as a terminal GIF for README.");
     } else {
         println!("DEMO_OK n={n}");

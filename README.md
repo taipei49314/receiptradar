@@ -19,9 +19,10 @@ Cross-platform install: **[docs/INSTALL.md](./docs/INSTALL.md)** (source, GitHub
 ```bash
 cargo install --path crates/rradar-cli --locked
 rradar version --long
-# From repo root — full closed loop (parse → ledger → stats → export → backup)
-rradar fixtures verify   # offline matrix totals
-rradar demo
+# From repo root — full closed loop (parse → ledger → export → CSV/backup merge → API)
+rradar fixtures verify   # offline matrix totals (text + mock + synthetic photos)
+rradar demo              # DEMO_OK; isolated demo ledger
+# Synthetic receipt PNGs (regen): cargo run -p gen-receipt-png -- fixtures/images
 # Windows helper / GIF narrative:
 #   powershell -File scripts/demo.ps1
 #   powershell -File scripts/record-demo.ps1

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "note": "Text fixtures for metric (a); mock_ocr binaries; images with sidecar for pixel path (CI); receipt_en_total89.png is for optional ONNX smoke (scripts/smoke-onnx.*). Real photo e2e matrix is PR-A11 under PII policy. Expanded matrix Cycle 31 for recordable demo.",
+  "note": "Text fixtures for metric (a); mock_ocr binaries; synthetic PNG receipts (tools/gen-receipt-png) with sidecar OCR for CI; receipt_en_* / photo PNGs are ONNX-smoke capable with --features onnx. Expanded matrix Cycle 31 + Cycle 36 synthetic photos.",
   "text_fixtures": [
     { "path": "text/familymart_89.txt", "class": "tw_convenience", "expect_total_minor": 8900, "expect_currency": "TWD", "demo": true },
     { "path": "text/seven_eleven_tw.txt", "class": "tw_convenience", "expect_total_minor": 4500, "expect_currency": "TWD", "demo": true },
@@ -31,18 +31,38 @@
     {
       "path": "images/familymart_photo.png",
       "sidecar": "images/familymart_photo.png.ocr.txt",
-      "class": "pixel_path_with_sidecar",
+      "class": "synthetic_photo_with_sidecar",
       "expect_total_minor": 8900,
       "expect_currency": "TWD",
-      "demo": true
+      "demo": true,
+      "pixels": "tools/gen-receipt-png"
     },
     {
       "path": "images/seven_eleven_photo.png",
       "sidecar": "images/seven_eleven_photo.png.ocr.txt",
-      "class": "pixel_path_with_sidecar",
+      "class": "synthetic_photo_with_sidecar",
       "expect_total_minor": 4500,
       "expect_currency": "TWD",
-      "demo": true
+      "demo": true,
+      "pixels": "tools/gen-receipt-png"
+    },
+    {
+      "path": "images/starbucks_photo.png",
+      "sidecar": "images/starbucks_photo.png.ocr.txt",
+      "class": "synthetic_photo_with_sidecar",
+      "expect_total_minor": 545,
+      "expect_currency": "USD",
+      "demo": true,
+      "pixels": "tools/gen-receipt-png"
+    },
+    {
+      "path": "images/mcdonalds_photo.png",
+      "sidecar": "images/mcdonalds_photo.png.ocr.txt",
+      "class": "synthetic_photo_with_sidecar",
+      "expect_total_minor": 16800,
+      "expect_currency": "TWD",
+      "demo": true,
+      "pixels": "tools/gen-receipt-png"
     }
   ],
   "onnx_smoke_images": [
@@ -52,6 +72,34 @@
       "expect_total_minor": 8900,
       "expect_currency": "TWD",
       "note": "optional scripts/smoke-onnx.*; requires --features onnx + models + ORT 1.22.x"
+    },
+    {
+      "path": "images/familymart_photo.png",
+      "class": "synthetic_en_receipt",
+      "expect_total_minor": 8900,
+      "expect_currency": "TWD",
+      "note": "same bitmap as receipt_en_total89; force_ocr for pixel path"
+    },
+    {
+      "path": "images/seven_eleven_photo.png",
+      "class": "synthetic_en_receipt",
+      "expect_total_minor": 4500,
+      "expect_currency": "TWD",
+      "note": "TOTAL 45 in pixels; sidecar has zh-TW merchant for mock path"
+    },
+    {
+      "path": "images/starbucks_photo.png",
+      "class": "synthetic_en_receipt",
+      "expect_total_minor": 545,
+      "expect_currency": "USD",
+      "note": "TOTAL $5.45"
+    },
+    {
+      "path": "images/mcdonalds_photo.png",
+      "class": "synthetic_en_receipt",
+      "expect_total_minor": 16800,
+      "expect_currency": "TWD",
+      "note": "TOTAL 168"
     }
   ],
   "qr_fixtures": [

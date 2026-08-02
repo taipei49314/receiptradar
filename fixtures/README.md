@@ -14,16 +14,23 @@
 |------|---------|
 | `text/*.txt` | Metric (a): extract/category given perfect OCR text |
 | `mock_ocr/*.bin` | Mock “image” path: `RRADAR_MOCK_OCR` + LF/CRLF + UTF-8 lines (binary in `.gitattributes`) |
-| `images/*.png` + `*.png.ocr.txt` | Pixel path with sidecar (CI-safe, no ONNX) |
-| `images/receipt_en_total89.png` | Synthetic receipt for optional ONNX smoke |
+| `images/*.png` + `*.png.ocr.txt` | Synthetic receipt PNGs (`tools/gen-receipt-png`) + sidecar for CI |
+| `images/receipt_en_total89.png` | Same family; optional ONNX smoke without sidecar |
 | `qr/*.payload.txt` | Appendix A left-QR structural decode samples |
 | `manifest.json` | Index for golden runners + **demo** flags |
 
 ```bash
-# Sidecar image path (default mock engine)
+# Regen synthetic PNGs (ASCII bitmap receipts; no PII)
+cargo run -p gen-receipt-png -- fixtures/images
+
+# Sidecar image path (default mock engine — uses .ocr.txt)
 rradar process fixtures/images/familymart_photo.png --explain
-# Real ONNX (local only — scripts/smoke-onnx.ps1)
+
+# Real ONNX on pixel path (local only — ignore sidecar)
+rradar process fixtures/images/familymart_photo.png --engine onnx --explain
+# or full smoke:
 powershell -File scripts/smoke-onnx.ps1
+rradar bench fixtures/images/receipt_en_total89.png --engine onnx --json
 ```
 
 ## Matrix index

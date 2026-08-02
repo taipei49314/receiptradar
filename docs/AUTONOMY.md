@@ -593,6 +593,30 @@ Tag: v0.1.0-cli.11
 | P2 | Richer real-photo fixtures for ONNX accuracy matrix |
 | P3 | Device A04 when Android available |
 
+## Cycle 36 — synthetic photo matrix + multi-device demo (main axis #5)
+
+### Plan
+1. `tools/gen-receipt-png` — ASCII bitmap synthetic receipt PNGs (no PII)
+2. Replace 70 B placeholders; add starbucks + mcdonalds photo + sidecars; expand manifest / onnx_smoke list
+3. Demo: currency-aware sidecar process; step **CSV import + backup merge** (no cloud)
+4. Docs: fixtures README, demo-showcase, README one-click path
+
+### Verify
+- `cargo test --workspace --locked` / clippy green
+- `rradar fixtures verify` → FIXTURES_VERIFY ok=29
+- `rradar demo --quiet` → DEMO_OK n=26
+
+### Result
+- Recordable demo uses real synthetic PNGs (attachable, ONNX-capable) + multi-device file import closed loop
+- CI remains mock/sidecar; regen: `cargo run -p gen-receipt-png -- fixtures/images`
+
+### Next seeds
+| Priority | Item |
+|----------|------|
+| P1 | FRB when Flutter present |
+| P2 | Device A04 when Android available |
+| P3 | Terminal GIF asset under docs/demo/ when ready to film |
+
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
 - Green tests before re-plan  

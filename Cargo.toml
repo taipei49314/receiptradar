@@ -6,6 +6,7 @@ members = [
     "crates/rradar-ocr",
     "crates/rradar-ffi",
     "tools/bench-ocr",
+    "tools/gen-receipt-png",
 ]
 default-members = [
     "crates/rradar-core",

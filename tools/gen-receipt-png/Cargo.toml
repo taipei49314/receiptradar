@@ -1,0 +1,14 @@
+[package]
+name = "gen-receipt-png"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Generate synthetic receipt PNGs for fixtures / ONNX smoke (no personal data)"
+
+[[bin]]
+name = "gen-receipt-png"
+path = "src/main.rs"
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
