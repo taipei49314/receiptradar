@@ -1211,12 +1211,19 @@ fn cmd_fixtures(args: &[String]) -> Result<(), String> {
     let mut verify = false;
     let mut json = false;
     let mut root: Option<PathBuf> = None;
+    let mut engine = "mock".to_string();
+    let mut include_onnx_smoke = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "verify" | "--verify" => verify = true,
             "list" => {}
             "--json" => json = true,
+            "--onnx-smoke" => include_onnx_smoke = true,
+            "--engine" => {
+                i += 1;
+                engine = args.get(i).ok_or("--engine needs mock|onnx|auto")?.clone();
+            }
             "--fixtures" | "--root" => {
                 i += 1;
                 root = Some(PathBuf::from(args.get(i).ok_or("needs path")?));
@@ -1224,8 +1231,11 @@ fn cmd_fixtures(args: &[String]) -> Result<(), String> {
             "--help" | "-h" => {
                 println!(
                     "rradar fixtures [list|verify] [--fixtures DIR] [--json]\n  \
+                     [--engine mock|onnx|auto] [--onnx-smoke]\n  \
                      Index the demo matrix (text / mock_ocr / image sidecar / qr).\n  \
-                     verify: process each entry and check expect_total_minor."
+                     verify: process each entry and check expect_total_minor.\n  \
+                     --engine onnx: force_ocr on images; requires --features onnx + models.\n  \
+                     --onnx-smoke: also verify onnx_smoke_images (pixel path)."
                 );
                 return Ok(());
             }
@@ -1307,6 +1317,18 @@ fn cmd_fixtures(args: &[String]) -> Result<(), String> {
             });
         }
     }
+    // Optional ONNX pixel matrix (synthetic PNGs); list always, verify when --onnx-smoke or --engine onnx.
+    let want_onnx_rows = include_onnx_smoke
+        || engine.eq_ignore_ascii_case("onnx")
+        || (engine.eq_ignore_ascii_case("auto")
+            && rradar_ocr::probe_onnx_readiness(rradar_ocr::default_models_dir())
+                .ready_for_inference);
+    if want_onnx_rows || !verify {
+        rows.extend(take(
+            "onnx_smoke",
+            man.get("onnx_smoke_images").and_then(|v| v.as_array()),
+        ));
+    }
 
     if json && !verify {
         println!(
@@ -1314,6 +1336,7 @@ fn cmd_fixtures(args: &[String]) -> Result<(), String> {
             serde_json::json!({
                 "root": fixtures.display().to_string(),
                 "count": rows.len(),
+                "engine": engine,
                 "entries": rows.iter().map(|r| serde_json::json!({
                     "kind": r.kind,
                     "path": r.path,
@@ -1346,18 +1369,35 @@ fn cmd_fixtures(args: &[String]) -> Result<(), String> {
                 r.path
             );
         }
-        println!("hint | rradar fixtures verify   # process + check totals");
-        println!("hint | rradar demo              # full closed-loop uses this matrix");
+        println!("hint | rradar fixtures verify                 # mock process + totals");
+        println!("hint | rradar fixtures verify --engine onnx --onnx-smoke");
+        println!("hint | rradar demo                            # full closed-loop");
         return Ok(());
     }
 
     // verify
-    let eng = engine_by_name("mock").map_err(|e| e.to_string())?;
+    if engine.eq_ignore_ascii_case("onnx") {
+        let ready = rradar_ocr::probe_onnx_readiness(rradar_ocr::default_models_dir());
+        if !ready.ready_for_inference {
+            return Err(format!(
+                "onnx not ready for fixtures verify — {} (models/README.md)",
+                ready.hint
+            ));
+        }
+    }
+    let eng = engine_by_name(&engine).map_err(|e| e.to_string())?;
     let cats = category_engine_with_packs();
     let mut ok_n = 0usize;
     let mut fail_n = 0usize;
     let mut skip_n = 0usize;
-    println!("rradar fixtures verify | root={}", fixtures.display());
+    let force_pixel = eng.name().contains("onnx");
+    println!(
+        "rradar fixtures verify | root={} | engine={} ({}) force_ocr={}",
+        fixtures.display(),
+        engine,
+        eng.name(),
+        force_pixel
+    );
     for r in &rows {
         if r.kind == "qr" {
             let p = fixtures.join(&r.path);
@@ -1368,6 +1408,16 @@ fn cmd_fixtures(args: &[String]) -> Result<(), String> {
                 fail_n += 1;
                 println!("  FAIL | qr missing | {}", r.path);
             }
+            continue;
+        }
+        // Skip text/mock under pure onnx pixel matrix mode when --onnx-smoke alone? No: full matrix still useful.
+        // Skip onnx_smoke rows when engine is mock (sidecar-less totals would use broken OCR).
+        if r.kind == "onnx_smoke" && !force_pixel {
+            skip_n += 1;
+            println!(
+                "  skip | onnx_smoke needs --engine onnx|auto(ready) | {}",
+                r.path
+            );
             continue;
         }
         let Some(expect) = r.expect_minor else {
@@ -1382,12 +1432,15 @@ fn cmd_fixtures(args: &[String]) -> Result<(), String> {
             continue;
         }
         let currency = Iso4217::parse(&r.currency).unwrap_or(Iso4217::TWD);
+        // Pixel path: force OCR so sidecars do not mask engine quality.
+        let force_ocr = force_pixel && (r.kind == "image_sidecar" || r.kind == "onnx_smoke");
         match process_path(
             &path,
             eng.as_ref(),
             &cats,
             ProcessOptions {
                 default_currency: currency,
+                force_ocr,
                 ..Default::default()
             },
         ) {

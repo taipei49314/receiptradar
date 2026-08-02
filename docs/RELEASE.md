@@ -85,6 +85,8 @@ git push origin v0.1.0-cli.N
 cargo build -p rradar-cli --release --locked
 ./target/release/rradar version --json > /tmp/vj.json
 python3 scripts/write-release-version.py --stage /tmp/rradar-stage --tag local --version-json /tmp/vj.json
+# binary smoke used by GitHub Release (Git Bash / Linux / macOS):
+bash scripts/smoke-release-binary.sh ./target/release/rradar
 ```
 
 ## Install from release

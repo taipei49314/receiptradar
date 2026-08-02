@@ -110,6 +110,8 @@ Never upscales small fixtures. Non-image payloads (`.txt`, mock bins) are untouc
 rradar ocr photo.jpg --engine onnx --max-edge 1280   # raw lines only
 rradar process photo.jpg --engine onnx --explain      # full draft + retry notes
 rradar bench fixtures/images --engine onnx --json     # A04 p50/p95
+# Full synthetic matrix (force_ocr; skips sidecars):
+cargo run -p rradar-cli --features onnx -- fixtures verify --engine onnx --onnx-smoke
 ```
 
 ## Desktop e2e smoke

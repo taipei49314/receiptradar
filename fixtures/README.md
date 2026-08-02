@@ -37,8 +37,10 @@ rradar bench fixtures/images/receipt_en_total89.png --engine onnx --json
 
 ```bash
 rradar fixtures list              # table from manifest.json
-rradar fixtures verify            # process each entry; check totals
+rradar fixtures verify            # process each entry; check totals (mock)
 rradar fixtures list --json
+# Real ONNX on synthetic PNG matrix (local; needs --features onnx + models):
+# cargo run -p rradar-cli --features onnx -- fixtures verify --engine onnx --onnx-smoke
 ```
 
 ## One-click demo

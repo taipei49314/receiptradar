@@ -684,6 +684,28 @@ Tag: v0.1.0-cli.11
 | P2 | Device A04 when Android available |
 | P3 | Orphan attachment GC on purge |
 
+## Cycle 40 — Windows release smoke fix + ONNX fixtures matrix (axes #4 + #1)
+
+### Plan
+1. Fix release Windows smoke (`python3`/`/tmp` broke GHA MSVC job → publish blocked)
+2. `scripts/smoke-release-binary.sh` portable gate (python|python3, TEMP, schema≥4)
+3. `rradar fixtures verify --engine mock|onnx|auto` + `--onnx-smoke` force_ocr pixel matrix
+4. Local ONNX verify green on synthetic PNG set
+
+### Verify
+- `cargo test --workspace --locked` / clippy green
+- `fixtures verify` mock ok=29; onnx `--onnx-smoke` ok=34 fail=0 (local weights)
+
+### Result
+- Tag release unblocked on Windows; product path to verify true OCR against committed synthetic fixtures
+
+### Next seeds
+| Priority | Item |
+|----------|------|
+| P1 | FRB when Flutter present |
+| P2 | Device A04 when Android available |
+| P3 | Orphan attachment GC on purge |
+
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
 - Green tests before re-plan  

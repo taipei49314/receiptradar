@@ -40,13 +40,8 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -f target/release/rradar.exe ]]; then B=target/release/rradar.exe; else B=target/release/rradar; fi
-          "$B" version --long
-          "$B" version --json | tee /tmp/rradar-version.json
-          "$B" engines
-          "$B" release-check --fixtures fixtures --quiet
-          "$B" help >/dev/null
-          # schema v4 soft-delete must be in this binary
-          python3 -c "import json; d=json.load(open('/tmp/rradar-version.json')); assert int(d.get('ledger_schema',0))>=4, d"
+          # Portable smoke: works on Windows GHA (python not python3; no /tmp assumption)
+          bash scripts/smoke-release-binary.sh "$B"
 
       - name: Package (unix)
         if: runner.os != 'Windows'
