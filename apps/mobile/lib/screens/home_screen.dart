@@ -7,6 +7,7 @@ import 'about_screen.dart';
 import 'budget_screen.dart';
 import 'capture_placeholder.dart';
 import 'ledger_screen.dart';
+import 'transfer_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, required this.prefs});
@@ -87,6 +88,17 @@ class _HomeScreenState extends State<HomeScreen> {
               );
             },
             icon: const Icon(Icons.savings_outlined),
+          ),
+          IconButton(
+            tooltip: s.transferTitle,
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => TransferScreen(strings: s),
+                ),
+              ).then((_) => _loadCore());
+            },
+            icon: const Icon(Icons.swap_horiz),
           ),
           IconButton(
             tooltip: s.aboutTitle,

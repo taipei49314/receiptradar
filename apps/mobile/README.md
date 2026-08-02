@@ -15,9 +15,10 @@ UI (Dart)  →  RradarApi facade  →  [Mock now | FRB later]  →  rradar-ffi  
 ```
 
 - No official cloud sync / relay.
-- Multi-device: encrypted backup / **handoff** files only.
+- Multi-device: encrypted backup / **handoff** / **CSV·JSON import** files only (no official relay).
 - Schema **v3**: tags + attachment_path via FFI; **capture one-shot** `process_confirm_*`.
-- **Tag filter** ledger UI + **Budgets** screen (mock API); FRB map: [docs/frb-contract.md](../../docs/frb-contract.md).
+- **Tag filter** ledger UI + **Budgets** + **Transfer** (import/merge demo) screens; FRB map: [docs/frb-contract.md](../../docs/frb-contract.md).
+- Raw OCR debug: FFI `ocr_lines_*_json` / mock `ocrLinesJson`.
 
 ## Run (when Flutter is installed)
 
@@ -39,8 +40,9 @@ cargo test -p rradar-ffi
 | Path | Role |
 |------|------|
 | `lib/main.dart` | App entry, FLAG_SECURE intent |
-| `lib/services/rradar_api.dart` | API facade + mock (schema 3, handoff caps) |
+| `lib/services/rradar_api.dart` | API facade + mock (schema 3, import/backup caps) |
 | `lib/screens/ledger_screen.dart` | Transaction list |
+| `lib/screens/transfer_screen.dart` | CSV/JSON import + backup merge demo |
 | `lib/screens/about_screen.dart` | Capabilities / paths |
 | `lib/bridge/README.md` | FRB wiring notes |
 | `../../docs/ffi.md` | Full FFI function map |

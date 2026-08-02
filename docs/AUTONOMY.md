@@ -571,6 +571,28 @@ Tag: v0.1.0-cli.11
 | P2 | Device A04 matrix when Android available |
 | P3 | Richer real-photo fixtures (replace 70 B placeholders) for ONNX accuracy matrix |
 
+## Cycle 35 — mobile FFI transfer + OCR raw surface (main axis #3)
+
+### Plan
+1. FFI `ocr_lines_path_json` / `ocr_lines_bytes_json` (preprocess + engine; no L1)
+2. Capture/process options: `max_edge`, `force_ocr`, `low_confidence_retry` on confirm + `process_image_bytes_json_ex`
+3. Multi-device file path: `import_json_json`, `backup_info_json` / `backup_verify_json` / `backup_merge_json`
+4. Capabilities flags + Dart Transfer screen + About/home wiring; docs ffi / frb-contract / android-ffi
+
+### Verify
+- `cargo test -p rradar-ffi` (incl. `ocr_lines_and_import_backup_merge`) / workspace / clippy green
+
+### Result
+- Mobile can debug OCR lines and merge CSV/JSON/backup without cloud; mock shell demos the closed loop
+- FRB still deferred (no Flutter SDK on builder)
+
+### Next seeds
+| Priority | Item |
+|----------|------|
+| P1 | FRB when Flutter present |
+| P2 | Richer real-photo fixtures for ONNX accuracy matrix |
+| P3 | Device A04 when Android available |
+
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
 - Green tests before re-plan  

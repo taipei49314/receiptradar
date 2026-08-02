@@ -41,9 +41,10 @@ See [android-ffi.md](./android-ffi.md), [ffi.md](./ffi.md).
 | Rust fn | Notes |
 |---------|--------|
 | `process_receipt_path_json` / `_ex` | draft only |
-| `process_image_bytes_json` | camera bytes |
-| **`process_confirm_path_json`** | one-shot path |
+| `process_image_bytes_json` / `_ex` | camera bytes; options: max_edge, force_ocr, low_confidence_retry |
+| **`process_confirm_path_json`** | one-shot path (+ preprocess options) |
 | **`process_confirm_bytes_json`** | one-shot camera |
+| **`ocr_lines_path_json` / `ocr_lines_bytes_json`** | raw OCR lines (debug; no L1) |
 | `confirm_draft_json` / `_ex` | multi-step confirm |
 
 ### Ledger
@@ -70,17 +71,21 @@ See [android-ffi.md](./android-ffi.md), [ffi.md](./ffi.md).
 | Rust fn | Notes |
 |---------|--------|
 | `stats_all_json` / `stats_month_json` / `stats_by_category_json` | never mix CCY |
-| `report_month_markdown` | |
+| `report_month_markdown` / **`report_year_markdown`** | |
+| **`aliases_json`** | merchant display map |
 | `top_merchants_json` | |
 | `categories_json` | |
 | `list_rule_packs_json` | |
 | `models_pins_json` | |
+| `engines_json` | |
 
-### Backup / handoff (no cloud)
+### Import / backup / handoff (no cloud)
 | Rust fn | Notes |
 |---------|--------|
+| **`import_csv_json`** / **`import_json_json`** | export-format merge (skip existing ids) |
 | `backup_create_file` | includes attachments + **budgets.toml** when present |
-| `handoff_create_file` / `handoff_info_json` / `handoff_apply_merge_json` | same |
+| **`backup_info_json`** / **`backup_verify_json`** / **`backup_merge_json`** | multi-device via `.rradar` file |
+| `handoff_create_file` / `handoff_info_json` / `handoff_apply_merge_json` | same family |
 
 ## Non-goals
 

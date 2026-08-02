@@ -15,10 +15,13 @@
 use rradar_core::{
     apply_handoff_merge, attachments_root_for_db, budget_status_month, category_engine_with_packs,
     create_backup, create_handoff, data_dir, default_db_path, ensure_inbox_dir, ensure_rules_dir,
-    inbox_dir, inspect_handoff, list_rule_files, normalize_tags, open_ledger_auto, process_bytes,
-    process_path, remove_stored_attachment, resolve_attachment_path, rules_dir, store_attachment,
-    store_attachment_bytes, write_handoff_file, BudgetBook, Iso4217, Ledger, ProcessOptions,
-    TxFilter, TxUpdate, LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
+    inbox_dir, inspect_backup, inspect_handoff, list_rule_files, normalize_tags, open_ledger_auto,
+    preprocess, process_bytes, process_path, remove_stored_attachment, resolve_attachment_path,
+    restore_backup, rules_dir, store_attachment, store_attachment_bytes, transactions_from_backup,
+    transactions_from_csv, verify_backup, write_handoff_file, write_restored_aliases,
+    write_restored_attachments, write_restored_budgets, BudgetBook, Iso4217, Ledger,
+    PreprocessConfig, ProcessOptions, Transaction, TxFilter, TxUpdate, LEDGER_SCHEMA_VERSION,
+    PRODUCT_ID, VERSION,
 };
 use rradar_ocr::engine_by_name;
 use serde::Serialize;
@@ -85,6 +88,11 @@ pub fn capabilities_json() -> String {
         local_budgets: bool,
         annual_report: bool,
         merchant_aliases: bool,
+        ocr_raw: bool,
+        csv_import: bool,
+        json_import: bool,
+        backup_merge: bool,
+        image_preprocess: bool,
         notes: &'static str,
     }
     serde_json::to_string(&Caps {
@@ -106,6 +114,11 @@ pub fn capabilities_json() -> String {
         local_budgets: true,
         annual_report: true,
         merchant_aliases: true,
+        ocr_raw: true,
+        csv_import: true,
+        json_import: true,
+        backup_merge: true,
+        image_preprocess: true,
         notes: "local-first; multi-device via backup/handoff file only",
     })
     .unwrap_or_else(|_| "{}".into())
@@ -194,6 +207,39 @@ pub fn count_transactions(db_path: String, passphrase: Option<String>) -> Result
 // OCR / process
 // ---------------------------------------------------------------------------
 
+/// Raw OCR line dump for camera debug (preprocess + engine; no L1 extract).
+///
+/// Returns JSON: `{ engine, decoded, resized, max_edge, lines: [{text, confidence}] }`.
+pub fn ocr_lines_bytes_json(
+    image_bytes: Vec<u8>,
+    engine: String,
+    max_edge: u32,
+) -> Result<String, String> {
+    let eng = engine_by_name(&engine).map_err(|e| e.to_string())?;
+    let edge = if max_edge == 0 { 1280 } else { max_edge };
+    let pre = preprocess(&image_bytes, PreprocessConfig { max_edge: edge });
+    let lines = eng.recognize(&pre.bytes).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({
+        "engine": eng.name(),
+        "decoded": pre.decoded,
+        "resized": pre.resized,
+        "max_edge": pre.max_edge,
+        "original": [pre.original_width, pre.original_height],
+        "output": [pre.output_width, pre.output_height],
+        "lines": lines.iter().map(|l| serde_json::json!({
+            "text": l.text,
+            "confidence": l.confidence,
+        })).collect::<Vec<_>>(),
+    })
+    .to_string())
+}
+
+/// Raw OCR lines from a filesystem path (same JSON as [`ocr_lines_bytes_json`]).
+pub fn ocr_lines_path_json(path: String, engine: String, max_edge: u32) -> Result<String, String> {
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    ocr_lines_bytes_json(bytes, engine, max_edge)
+}
+
 /// Process a filesystem path (text fixture, image, or mock-ocr binary).
 /// Returns JSON [`rradar_core::ReceiptDraft`].
 pub fn process_receipt_path_json(
@@ -230,25 +276,46 @@ pub fn process_receipt_path_json_ex(
 
 /// Process raw image / mock-OCR bytes from the camera pipeline.
 /// Prefer this on mobile after writing a temp file is undesirable.
+///
+/// Optional `options_json` may include `max_edge`, `force_ocr`, `low_confidence_retry`
+/// (see capture one-shot options). Empty string = defaults.
 pub fn process_image_bytes_json(
     image_bytes: Vec<u8>,
     currency: String,
     engine: String,
     qr_payload: Option<String>,
 ) -> Result<String, String> {
-    let eng = engine_by_name(&engine).map_err(|e| e.to_string())?;
+    process_image_bytes_json_ex(image_bytes, currency, engine, qr_payload, String::new())
+}
+
+/// Process camera bytes with full process options JSON.
+pub fn process_image_bytes_json_ex(
+    image_bytes: Vec<u8>,
+    currency: String,
+    engine: String,
+    qr_payload: Option<String>,
+    options_json: String,
+) -> Result<String, String> {
+    let mut opts = parse_capture_opts(&options_json)?;
+    if !currency.is_empty() {
+        if let Some(c) = Iso4217::parse(&currency) {
+            opts.currency = c;
+        }
+    }
+    if !engine.is_empty() {
+        opts.engine = engine;
+    }
+    if qr_payload.is_some() {
+        opts.qr_payload = qr_payload;
+    }
+    let eng = engine_by_name(&opts.engine).map_err(|e| e.to_string())?;
     let cats = category_engine_with_packs();
-    let cur = Iso4217::parse(&currency).unwrap_or(Iso4217::TWD);
     let draft = process_bytes(
         &image_bytes,
         None,
         eng.as_ref(),
         &cats,
-        ProcessOptions {
-            default_currency: cur,
-            qr_payload,
-            ..Default::default()
-        },
+        process_opts_from_capture(&opts),
     )
     .map_err(|e| e.to_string())?;
     serde_json::to_string(&draft).map_err(|e| e.to_string())
@@ -274,11 +341,7 @@ pub fn process_confirm_path_json(
         Path::new(&path),
         eng.as_ref(),
         &cats,
-        ProcessOptions {
-            default_currency: opts.currency,
-            qr_payload: opts.qr_payload.clone(),
-            ..Default::default()
-        },
+        process_opts_from_capture(&opts),
     )
     .map_err(|e| e.to_string())?;
 
@@ -287,7 +350,7 @@ pub fn process_confirm_path_json(
     }
 
     let bytes = std::fs::read(&path).unwrap_or_default();
-    let hash = rradar_core::preprocess::content_hash(&bytes);
+    let hash = rradar_core::content_hash(&bytes);
     with_ledger(&db_path, passphrase.as_deref(), |ledger| {
         let res = ledger
             .confirm_draft(&draft, Some(&hash), opts.notes.as_deref(), opts.force)
@@ -339,11 +402,7 @@ pub fn process_confirm_bytes_json(
         None,
         eng.as_ref(),
         &cats,
-        ProcessOptions {
-            default_currency: opts.currency,
-            qr_payload: opts.qr_payload.clone(),
-            ..Default::default()
-        },
+        process_opts_from_capture(&opts),
     )
     .map_err(|e| e.to_string())?;
 
@@ -351,7 +410,7 @@ pub fn process_confirm_bytes_json(
         return Ok(serde_json::json!({ "draft": draft, "confirmed": false }).to_string());
     }
 
-    let hash = rradar_core::preprocess::content_hash(&image_bytes);
+    let hash = rradar_core::content_hash(&image_bytes);
     with_ledger(&db_path, passphrase.as_deref(), |ledger| {
         let res = ledger
             .confirm_draft(&draft, Some(&hash), opts.notes.as_deref(), opts.force)
@@ -398,6 +457,21 @@ struct CaptureOpts {
     tags: Option<String>,
     force: bool,
     notes: Option<String>,
+    max_edge: u32,
+    force_ocr: bool,
+    low_confidence_retry: f32,
+}
+
+fn process_opts_from_capture(opts: &CaptureOpts) -> ProcessOptions {
+    ProcessOptions {
+        default_currency: opts.currency,
+        qr_payload: opts.qr_payload.clone(),
+        preprocess: PreprocessConfig {
+            max_edge: opts.max_edge,
+        },
+        low_confidence_retry: opts.low_confidence_retry,
+        force_ocr: opts.force_ocr,
+    }
 }
 
 fn parse_capture_opts(options_json: &str) -> Result<CaptureOpts, String> {
@@ -411,6 +485,9 @@ fn parse_capture_opts(options_json: &str) -> Result<CaptureOpts, String> {
         tags: Option<String>,
         force: Option<bool>,
         notes: Option<String>,
+        max_edge: Option<u32>,
+        force_ocr: Option<bool>,
+        low_confidence_retry: Option<f32>,
     }
     let raw: Raw = if options_json.trim().is_empty() {
         Raw::default()
@@ -430,6 +507,9 @@ fn parse_capture_opts(options_json: &str) -> Result<CaptureOpts, String> {
         tags: raw.tags,
         force: raw.force.unwrap_or(false),
         notes: raw.notes,
+        max_edge: raw.max_edge.unwrap_or(1280).max(1),
+        force_ocr: raw.force_ocr.unwrap_or(false),
+        low_confidence_retry: raw.low_confidence_retry.unwrap_or(0.45),
     })
 }
 
@@ -791,7 +871,30 @@ pub fn import_csv_json(
     passphrase: Option<String>,
     csv_text: String,
 ) -> Result<String, String> {
-    let rows = rradar_core::transactions_from_csv(&csv_text).map_err(|e| e.to_string())?;
+    let rows = transactions_from_csv(&csv_text).map_err(|e| e.to_string())?;
+    let total = rows.len();
+    with_ledger(&db_path, passphrase.as_deref(), |ledger| {
+        let (ins, skip) = ledger
+            .import_transactions(&rows)
+            .map_err(|e| e.to_string())?;
+        Ok(serde_json::json!({
+            "inserted": ins,
+            "skipped": skip,
+            "total_rows": total,
+            "local_only": true,
+        })
+        .to_string())
+    })
+}
+
+/// Import transactions from export-format JSON array text.
+/// Returns JSON `{inserted, skipped, total_rows, local_only}`.
+pub fn import_json_json(
+    db_path: String,
+    passphrase: Option<String>,
+    json_text: String,
+) -> Result<String, String> {
+    let rows: Vec<Transaction> = serde_json::from_str(&json_text).map_err(|e| e.to_string())?;
     let total = rows.len();
     with_ledger(&db_path, passphrase.as_deref(), |ledger| {
         let (ins, skip) = ledger
@@ -956,6 +1059,57 @@ pub fn backup_create_file(
     })
 }
 
+/// Inspect encrypted backup (no write). Returns inventory JSON.
+pub fn backup_info_json(backup_passphrase: String, backup_path: String) -> Result<String, String> {
+    let sealed = std::fs::read(&backup_path).map_err(|e| e.to_string())?;
+    let info = inspect_backup(&backup_passphrase, &sealed).map_err(|e| e.to_string())?;
+    serde_json::to_string(&info).map_err(|e| e.to_string())
+}
+
+/// Verify backup structure; returns manifest JSON on success.
+pub fn backup_verify_json(
+    backup_passphrase: String,
+    backup_path: String,
+) -> Result<String, String> {
+    let sealed = std::fs::read(&backup_path).map_err(|e| e.to_string())?;
+    let man = verify_backup(&backup_passphrase, &sealed).map_err(|e| e.to_string())?;
+    serde_json::to_string(&man).map_err(|e| e.to_string())
+}
+
+/// Merge backup transactions into target ledger (skip existing ids).
+/// Rehydrates attachments / budgets / aliases when present.
+/// Returns `{inserted, skipped, attachments, budgets, aliases, manifest}`.
+pub fn backup_merge_json(
+    db_path: String,
+    passphrase_db: Option<String>,
+    backup_passphrase: String,
+    backup_path: String,
+) -> Result<String, String> {
+    let sealed = std::fs::read(&backup_path).map_err(|e| e.to_string())?;
+    let restored = restore_backup(&backup_passphrase, &sealed).map_err(|e| e.to_string())?;
+    let rows = transactions_from_backup(&restored).map_err(|e| e.to_string())?;
+    with_ledger(&db_path, passphrase_db.as_deref(), |ledger| {
+        let (ins, skip) = ledger
+            .import_transactions(&rows)
+            .map_err(|e| e.to_string())?;
+        let att_n =
+            write_restored_attachments(ledger.path(), &restored).map_err(|e| e.to_string())?;
+        let bud = write_restored_budgets(ledger.path(), &restored).map_err(|e| e.to_string())?;
+        let ali = write_restored_aliases(ledger.path(), &restored).map_err(|e| e.to_string())?;
+        Ok(serde_json::json!({
+            "inserted": ins,
+            "skipped": skip,
+            "attachments": att_n,
+            "budgets": bud,
+            "aliases": ali,
+            "total_rows": rows.len(),
+            "manifest": restored.manifest,
+            "local_only": true,
+        })
+        .to_string())
+    })
+}
+
 /// Create multi-device handoff package at `out_path` (encrypted file; no cloud).
 pub fn handoff_create_file(
     db_path: String,
@@ -1024,11 +1178,91 @@ mod tests {
         assert!(caps.contains("\"backup_includes_attachments\":true"));
         assert!(caps.contains("\"capture_oneshot\":true"));
         assert!(caps.contains("\"engine_auto\":true"));
+        assert!(caps.contains("\"ocr_raw\":true"));
+        assert!(caps.contains("\"backup_merge\":true"));
+        assert!(caps.contains("\"csv_import\":true"));
+        assert!(caps.contains("\"json_import\":true"));
+        assert!(caps.contains("\"image_preprocess\":true"));
         assert!(!categories_json().is_empty());
         let eng = engines_json();
         assert!(eng.contains("auto_resolves_to"));
         let _ = list_rule_packs_json();
         let _ = models_pins_json(String::new()).unwrap_or_default();
+    }
+
+    #[test]
+    fn ocr_lines_and_import_backup_merge() {
+        let root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/text/familymart_89.txt");
+        assert!(root.is_file());
+        // Mock magic via path ocr (text file is non-image → engine still runs on bytes)
+        let mut magic = b"RRADAR_MOCK_OCR\n".to_vec();
+        magic.extend_from_slice("全家便利商店\n合計 89\n2024-05-01\n".as_bytes());
+        let ocr = ocr_lines_bytes_json(magic.clone(), "mock".into(), 1280).expect("ocr");
+        assert!(ocr.contains("合計") || ocr.contains("89"), "{ocr}");
+        assert!(ocr.contains("\"engine\""), "{ocr}");
+
+        let dir = std::env::temp_dir().join(format!("rradar-ffi-merge-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let db = dir.join("a.db");
+        ensure_ledger(db.display().to_string()).unwrap();
+        let conf = process_confirm_bytes_json(
+            db.display().to_string(),
+            None,
+            magic,
+            "r.bin".into(),
+            r#"{"confirm":true,"attach":true,"tags":"merge-src","currency":"TWD"}"#.into(),
+        )
+        .unwrap();
+        assert!(conf.contains("\"inserted\":true"), "{conf}");
+
+        std::env::set_var("RRADAR_FAST_BACKUP", "1");
+        let bak = dir.join("m.rradar");
+        backup_create_file(
+            db.display().to_string(),
+            None,
+            "secret".into(),
+            bak.display().to_string(),
+        )
+        .unwrap();
+        let info = backup_info_json("secret".into(), bak.display().to_string()).unwrap();
+        assert!(
+            info.contains("manifest") || info.contains("transaction"),
+            "{info}"
+        );
+        let ver = backup_verify_json("secret".into(), bak.display().to_string()).unwrap();
+        assert!(!ver.is_empty(), "{ver}");
+
+        let db2 = dir.join("b.db");
+        ensure_ledger(db2.display().to_string()).unwrap();
+        let merged = backup_merge_json(
+            db2.display().to_string(),
+            None,
+            "secret".into(),
+            bak.display().to_string(),
+        )
+        .unwrap();
+        assert!(merged.contains("\"inserted\""), "{merged}");
+        assert_eq!(
+            count_transactions(db2.display().to_string(), None).unwrap(),
+            1
+        );
+
+        // CSV + JSON import into empty third ledger
+        let db3 = dir.join("c.db");
+        ensure_ledger(db3.display().to_string()).unwrap();
+        let csv = "id,merchant,amount_minor,currency,category,transacted_at,notes,tags,attachment_path\n,CSV Shop,1200,TWD,shopping,2024-01-01,,,";
+        let csv_res = import_csv_json(db3.display().to_string(), None, csv.into()).unwrap();
+        assert!(csv_res.contains("\"inserted\":1"), "{csv_res}");
+        let json = r#"[{"id":"01TESTJSONIMPORT000000000000","confirmed_at":"2024-02-02T00:00:00Z","transacted_at":"2024-02-02","merchant":"JSON Shop","amount_minor":3400,"currency":"TWD","exponent":2,"category":"other","invoice_id":null,"source_path":"import","overall_confidence":1.0,"content_hash":null,"notes":null,"tags":null,"attachment_path":null}]"#;
+        let json_res = import_json_json(db3.display().to_string(), None, json.into()).unwrap();
+        assert!(json_res.contains("\"inserted\":1"), "{json_res}");
+        assert_eq!(
+            count_transactions(db3.display().to_string(), None).unwrap(),
+            2
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

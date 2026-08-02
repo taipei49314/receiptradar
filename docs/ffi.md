@@ -35,7 +35,8 @@ cargo build -p rradar-ffi --release
 |----------|---------|
 | `process_receipt_path_json` | File path → draft JSON |
 | `process_receipt_path_json_ex` | + optional TW QR payload |
-| `process_image_bytes_json` | Camera bytes → draft JSON |
+| `process_image_bytes_json` / `_ex` | Camera bytes → draft JSON (+ max_edge / force_ocr) |
+| **`ocr_lines_path_json` / `ocr_lines_bytes_json`** | Raw OCR lines (debug; preprocess only) |
 
 ### Ledger
 | Function | Purpose |
@@ -73,7 +74,10 @@ cargo build -p rradar-ffi --release
 | Function | Purpose |
 |----------|---------|
 | `import_csv_json` | Import export-format CSV → ledger (skip existing ids) |
+| `import_json_json` | Import export-format JSON array → ledger |
 | `backup_create_file` | Encrypted backup.rradar (**attachments + budgets.toml** when present) |
+| **`backup_info_json` / `backup_verify_json`** | Inspect / verify `.rradar` without writing |
+| **`backup_merge_json`** | Merge backup into ledger (+ rehydrate attachments/budgets/aliases) |
 | `handoff_create_file` | Multi-device handoff package (+ attachments + budgets) |
 | `handoff_info_json` | Inspect handoff |
 | `handoff_apply_merge_json` | Merge into local ledger (+ rehydrate blobs) |

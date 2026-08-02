@@ -14,6 +14,7 @@
 - Local HTTP API expanded for product demo automation (capabilities, paths, attach, process flags)
 
 ### Added
+- **Mobile FFI transfer surface (axis #3):** `ocr_lines_*_json`, `import_json_json`, `backup_info|verify|merge_json`; capture options `max_edge`/`force_ocr`/`low_confidence_retry`; Dart Transfer screen + capability flags (`ocr_raw`, `csv_import`, `backup_merge`, …)
 - **Real image preprocess + ONNX product path (axis #1):** decode JPEG/PNG/WebP/GIF; max-edge 1280 downscale + low-conf retry at 1600; `rradar ocr` raw line dump; `rradar bench` A04 harness (`force_ocr`, p50/p95); desktop ONNX warm p50 ~115 ms recorded in spike-ocr-size.md
 - **CSV import (axis #2):** `transactions_from_csv` + `rradar import csv` (export header roundtrip, empty id → ULID, skip existing); FFI `import_csv_json`
 - **Supply-chain dual gate (axis #4):** root `deny.toml` + `cargo deny check` (pin 0.20.2); `scripts/check-supply-chain.ps1`/`.sh`; CI installs cargo-deny and runs check; CI `fixtures verify`

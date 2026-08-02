@@ -15,6 +15,13 @@ class Strings {
     required this.aboutTitle,
     required this.ledgerTitle,
     required this.refresh,
+    required this.transferTitle,
+    required this.transferBlurb,
+    required this.transferHint,
+    required this.importCsv,
+    required this.importJson,
+    required this.backupMerge,
+    required this.ocrRaw,
   });
 
   final String locale;
@@ -31,6 +38,13 @@ class Strings {
   final String aboutTitle;
   final String ledgerTitle;
   final String refresh;
+  final String transferTitle;
+  final String transferBlurb;
+  final String transferHint;
+  final String importCsv;
+  final String importJson;
+  final String backupMerge;
+  final String ocrRaw;
 
   static Strings of(String locale) {
     if (locale.startsWith('en')) {
@@ -52,6 +66,14 @@ class Strings {
         aboutTitle: 'About / capabilities',
         ledgerTitle: 'Ledger',
         refresh: 'Refresh',
+        transferTitle: 'Import / transfer',
+        transferBlurb:
+            'Multi-device is a file you copy yourself: CSV, JSON export, or encrypted backup. No official cloud relay.',
+        transferHint: 'Run an import or backup-merge demo to grow the mock ledger.',
+        importCsv: 'Import CSV (demo)',
+        importJson: 'Import JSON (demo)',
+        backupMerge: 'Merge backup (demo)',
+        ocrRaw: 'OCR lines (debug)',
       );
     }
     return const Strings(
@@ -70,6 +92,13 @@ class Strings {
       aboutTitle: '關於／能力',
       ledgerTitle: '帳本',
       refresh: '重新整理',
+      transferTitle: '匯入／轉移',
+      transferBlurb: '多裝置靠你自己複製檔案：CSV、JSON 匯出或加密備份。沒有官方雲端中繼。',
+      transferHint: '執行匯入或備份合併 demo，可在 mock 帳本新增交易。',
+      importCsv: '匯入 CSV（demo）',
+      importJson: '匯入 JSON（demo）',
+      backupMerge: '合併備份（demo）',
+      ocrRaw: 'OCR 原始行（除錯）',
     );
   }
 }

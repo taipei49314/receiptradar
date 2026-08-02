@@ -24,6 +24,13 @@ class RradarCapabilities {
     required this.engineAuto,
     required this.tagFilter,
     required this.localBudgets,
+    required this.annualReport,
+    required this.merchantAliases,
+    required this.ocrRaw,
+    required this.csvImport,
+    required this.jsonImport,
+    required this.backupMerge,
+    required this.imagePreprocess,
     required this.notes,
   });
 
@@ -42,6 +49,13 @@ class RradarCapabilities {
   final bool engineAuto;
   final bool tagFilter;
   final bool localBudgets;
+  final bool annualReport;
+  final bool merchantAliases;
+  final bool ocrRaw;
+  final bool csvImport;
+  final bool jsonImport;
+  final bool backupMerge;
+  final bool imagePreprocess;
   final String notes;
 
   factory RradarCapabilities.fromJson(Map<String, dynamic> j) {
@@ -62,6 +76,13 @@ class RradarCapabilities {
       engineAuto: j['engine_auto'] as bool? ?? false,
       tagFilter: j['tag_filter'] as bool? ?? false,
       localBudgets: j['local_budgets'] as bool? ?? false,
+      annualReport: j['annual_report'] as bool? ?? false,
+      merchantAliases: j['merchant_aliases'] as bool? ?? false,
+      ocrRaw: j['ocr_raw'] as bool? ?? false,
+      csvImport: j['csv_import'] as bool? ?? false,
+      jsonImport: j['json_import'] as bool? ?? false,
+      backupMerge: j['backup_merge'] as bool? ?? false,
+      imagePreprocess: j['image_preprocess'] as bool? ?? false,
       notes: j['notes'] as String? ?? '',
     );
   }
@@ -95,6 +116,13 @@ abstract class RradarApi {
     String engine = 'mock',
   });
 
+  /// Raw OCR lines (FFI `ocr_lines_*_json`) — debug before L1 extract.
+  Future<String> ocrLinesJson({
+    required String pathOrLabel,
+    String engine = 'mock',
+    int maxEdge = 1280,
+  });
+
   Future<void> ensureLedger(String dbPath);
   Future<int> count(String dbPath);
   Future<String> listJson(String dbPath, {int limit = 50});
@@ -114,6 +142,11 @@ abstract class RradarApi {
   Future<String> enginesJson();
   Future<String> statsAllJson(String dbPath);
   Future<String> reportMonthMarkdown(String dbPath, {int year = 2024, int month = 5});
+  Future<String> reportYearMarkdown(String dbPath, {int year = 2024});
+  Future<String> aliasesJson();
+  Future<String> importCsvJson(String dbPath, String csvText);
+  Future<String> importJsonJson(String dbPath, String jsonText);
+  Future<String> backupMergeDemo(String dbPath);
   Future<String> listRulePacksJson();
   Future<String> modelsPinsJson({String modelsDir = ''});
 }
@@ -125,6 +158,7 @@ final RradarApi rradarApi = MockRradarApi();
 class MockRradarApi implements RradarApi {
   final List<Map<String, dynamic>> _tx = [];
   final Map<String, int> _budgetMinor = {'TWD': 3000000}; // 30000 major * 100
+  int _importSeq = 0;
 
   @override
   Future<String> apiVersion() async => 'receiptradar ffi mock 0.1.0-alpha.0';
@@ -147,6 +181,13 @@ class MockRradarApi implements RradarApi {
       engineAuto: true,
       tagFilter: true,
       localBudgets: true,
+      annualReport: true,
+      merchantAliases: true,
+      ocrRaw: true,
+      csvImport: true,
+      jsonImport: true,
+      backupMerge: true,
+      imagePreprocess: true,
       notes: 'mock api — local-first; multi-device via backup/handoff file only',
     );
   }
@@ -220,6 +261,17 @@ class MockRradarApi implements RradarApi {
     return '{"draft":$draft,"confirmed":true,"inserted":true,'
         '"transaction":{"id":"$id","attachment_path":"${attach ? 'attachments/$id/capture.jpg' : ''}",'
         '"tags":"$tags","amount_minor":8900,"currency":"$currency"}}';
+  }
+
+  @override
+  Future<String> ocrLinesJson({
+    required String pathOrLabel,
+    String engine = 'mock',
+    int maxEdge = 1280,
+  }) async {
+    return '{"engine":"$engine","decoded":false,"resized":false,"max_edge":$maxEdge,'
+        '"lines":[{"text":"MOCK OCR $pathOrLabel","confidence":1.0},'
+        '{"text":"TOTAL 89","confidence":0.99}]}';
   }
 
   @override
@@ -330,6 +382,62 @@ class MockRradarApi implements RradarApi {
   }
 
   @override
+  Future<String> reportYearMarkdown(String dbPath, {int year = 2024}) async {
+    final n = _tx.length;
+    return '# ReceiptRadar annual $year\n\nMock ledger: **$n** transactions.\n';
+  }
+
+  @override
+  Future<String> aliasesJson() async => '{}';
+
+  @override
+  Future<String> importCsvJson(String dbPath, String csvText) async {
+    _importSeq += 1;
+    final id = 'csv-$_importSeq';
+    _tx.insert(0, {
+      'id': id,
+      'merchant': 'CSV Import',
+      'amount_minor': 1200,
+      'currency': 'TWD',
+      'category': 'shopping',
+      'tags': 'import,csv',
+    });
+    return '{"inserted":1,"skipped":0,"total_rows":1,"local_only":true}';
+  }
+
+  @override
+  Future<String> importJsonJson(String dbPath, String jsonText) async {
+    _importSeq += 1;
+    final id = 'json-$_importSeq';
+    _tx.insert(0, {
+      'id': id,
+      'merchant': 'JSON Import',
+      'amount_minor': 3400,
+      'currency': 'TWD',
+      'category': 'other',
+      'tags': 'import,json',
+    });
+    return '{"inserted":1,"skipped":0,"total_rows":1,"local_only":true}';
+  }
+
+  @override
+  Future<String> backupMergeDemo(String dbPath) async {
+    // Simulate multi-device backup merge without real crypto in mock shell.
+    _importSeq += 1;
+    final id = 'merge-$_importSeq';
+    _tx.insert(0, {
+      'id': id,
+      'merchant': 'Backup Merge',
+      'amount_minor': 5000,
+      'currency': 'TWD',
+      'category': 'other',
+      'tags': 'import,backup',
+    });
+    return '{"inserted":1,"skipped":0,"attachments":0,"budgets":false,'
+        '"aliases":false,"total_rows":1,"local_only":true}';
+  }
+
+  @override
   Future<String> listRulePacksJson() async => '[]';
 
   @override
@@ -383,6 +491,14 @@ class NativeRradarApi implements RradarApi {
       throw _e;
 
   @override
+  Future<String> ocrLinesJson({
+    required String pathOrLabel,
+    String engine = 'mock',
+    int maxEdge = 1280,
+  }) async =>
+      throw _e;
+
+  @override
   Future<void> ensureLedger(String dbPath) async => throw _e;
 
   @override
@@ -425,6 +541,23 @@ class NativeRradarApi implements RradarApi {
     int month = 5,
   }) async =>
       throw _e;
+
+  @override
+  Future<String> reportYearMarkdown(String dbPath, {int year = 2024}) async =>
+      throw _e;
+
+  @override
+  Future<String> aliasesJson() async => throw _e;
+
+  @override
+  Future<String> importCsvJson(String dbPath, String csvText) async => throw _e;
+
+  @override
+  Future<String> importJsonJson(String dbPath, String jsonText) async =>
+      throw _e;
+
+  @override
+  Future<String> backupMergeDemo(String dbPath) async => throw _e;
 
   @override
   Future<String> listRulePacksJson() async => throw _e;

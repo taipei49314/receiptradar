@@ -37,14 +37,16 @@ Preferred mobile path after camera frame is available as bytes or a temp file:
 |------|-----|
 | `process_confirm_bytes_json(db, pass, bytes, "capture.jpg", opts)` | Camera bytes → OCR → confirm → attachment store |
 | `process_confirm_path_json(db, pass, path, opts)` | Gallery / inbox path one-shot |
+| `ocr_lines_bytes_json(bytes, engine, max_edge)` | Raw OCR debug before confirm |
 | `attach_bytes_json` | Attach after separate confirm |
+| `backup_merge_json` / `import_csv_json` / `import_json_json` | Multi-device file import (SAF) |
 
 `opts` JSON example:
 
 ```json
-{"confirm":true,"attach":true,"tags":"capture","currency":"TWD","engine":"mock"}
+{"confirm":true,"attach":true,"tags":"capture","currency":"TWD","engine":"mock","max_edge":1280,"force_ocr":false,"low_confidence_retry":0.45}
 ```
 
 ## Flutter shell today
 
-Without FRB, `MockRradarApi.processConfirmPath` + Capture screen exercise the same closed-loop so UI can ship independently of NDK.
+Without FRB, `MockRradarApi` + Capture / **Transfer** screens exercise capture + CSV/JSON/backup-merge closed-loops so UI can ship independently of NDK.
