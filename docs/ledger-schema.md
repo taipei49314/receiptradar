@@ -8,7 +8,8 @@
 |---------|-----------------|---------|
 | 1 | historical | Base `meta` + `transactions` tables |
 | 2 | | `transactions.updated_at`; meta `migrated_to_2_at`, `app_version` |
-| **3** | `LEDGER_SCHEMA_VERSION = 3` | `transactions.tags`, `transactions.attachment_path` |
+| 3 | | `transactions.tags`, `transactions.attachment_path` |
+| **4** | `LEDGER_SCHEMA_VERSION = 4` | `transactions.deleted_at` soft-delete (trash / restore / purge) |
 
 - On `Ledger::open`, migrations run **forward only** until the binary’s supported version.
 - If the file’s version is **newer** than the binary → hard error (`SchemaTooNew`): upgrade the CLI.
@@ -28,7 +29,7 @@ rradar doctor               # shows supported + on-disk schema
 | `schema_version` | integer as string |
 | `created_app_version` | app version when DB was first created |
 | `app_version` | last migrating app version |
-| `migrated_to_2_at` / `migrated_to_3_at` | ISO timestamps of migrations |
+| `migrated_to_2_at` / `migrated_to_3_at` / `migrated_to_4_at` | ISO timestamps of migrations |
 
 ### `transactions`
 
@@ -41,7 +42,25 @@ Core columns from v1 (id, amounts, currency, category, invoice_id, hashes, notes
 | `tags` | Free-form comma-separated labels (e.g. `demo,receipt`) |
 | `attachment_path` | Relative path to a receipt blob under the data dir |
 
-Indexes: date+currency, merchant, invoice_id, content_hash.
+**v4+:**
+
+| column | meaning |
+|--------|---------|
+| `deleted_at` | Soft-delete ISO timestamp; `NULL` = active in stats/list/export |
+
+Indexes: date+currency, merchant, invoice_id, content_hash, deleted_at.
+
+### Soft-delete / trash (schema v4)
+
+| Action | CLI | Behavior |
+|--------|-----|----------|
+| Soft delete | `rradar delete <id> --yes` | Sets `deleted_at`; leaves trash |
+| List trash | `rradar trash` | Only soft-deleted rows |
+| Restore | `rradar restore <id>` | Clears `deleted_at` |
+| Hard purge | `rradar purge <id> --yes` / `purge --all --yes` | `DELETE` row permanently |
+| Integrity | `rradar doctor` | `PRAGMA integrity_check` + active/trash counts |
+
+Default `list` / `stats` / `export` / dedupe **ignore** trash. No cloud tombstones — local lifecycle only.
 
 ### Query surface (CLI / FFI)
 

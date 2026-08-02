@@ -45,7 +45,8 @@ pub use export::{
 pub use handoff::{apply_handoff_merge, create_handoff, inspect_handoff, write_handoff_file};
 pub use ledger::{
     apply_edits, CategoryStat, ConfirmResult, CurrencyMonthStat, DedupeLevel, DedupeWarning,
-    Ledger, LedgerError, Transaction, TxFilter, TxUpdate, UserEdits, LEDGER_SCHEMA_VERSION,
+    Ledger, LedgerError, LedgerIntegrity, Transaction, TxFilter, TxUpdate, UserEdits,
+    LEDGER_SCHEMA_VERSION,
 };
 pub use money::{sum_same_currency, Iso4217, Money, MoneyError};
 pub use paths::{data_dir, default_db_path, ensure_data_dir, ensure_inbox_dir, inbox_dir};

@@ -93,6 +93,8 @@ pub fn capabilities_json() -> String {
         json_import: bool,
         backup_merge: bool,
         image_preprocess: bool,
+        soft_delete: bool,
+        trash_restore: bool,
         notes: &'static str,
     }
     serde_json::to_string(&Caps {
@@ -119,6 +121,8 @@ pub fn capabilities_json() -> String {
         json_import: true,
         backup_merge: true,
         image_preprocess: true,
+        soft_delete: true,
+        trash_restore: true,
         notes: "local-first; multi-device via backup/handoff file only",
     })
     .unwrap_or_else(|_| "{}".into())
@@ -563,7 +567,7 @@ pub fn list_transactions_json(
 /// Query transactions with optional tag / category / text filters (JSON array).
 ///
 /// `filter_json` keys (all optional): limit, offset, currency, query, tag, category,
-/// year_month, from, to, min_minor, max_minor, has_attachment.
+/// year_month, from, to, min_minor, max_minor, has_attachment, trash_only, include_deleted.
 pub fn query_transactions_json(
     db_path: String,
     passphrase: Option<String>,
@@ -583,6 +587,8 @@ pub fn query_transactions_json(
         min_minor: Option<i64>,
         max_minor: Option<i64>,
         has_attachment: Option<bool>,
+        trash_only: Option<bool>,
+        include_deleted: Option<bool>,
     }
     let f: F = if filter_json.trim().is_empty() {
         F::default()
@@ -602,6 +608,8 @@ pub fn query_transactions_json(
         min_minor: f.min_minor,
         max_minor: f.max_minor,
         has_attachment: f.has_attachment,
+        trash_only: f.trash_only.unwrap_or(false),
+        include_deleted: f.include_deleted.unwrap_or(false),
     };
     with_ledger(&db_path, passphrase.as_deref(), |ledger| {
         let rows = ledger
@@ -674,13 +682,72 @@ pub fn last_transaction_json(
 }
 
 /// Delete a transaction by id. Returns true if a row was removed.
+/// Soft-delete (schema v4 trash). Returns false if missing or already trashed.
 pub fn delete_transaction(
     db_path: String,
     passphrase: Option<String>,
     id: String,
 ) -> Result<bool, String> {
     with_ledger(&db_path, passphrase.as_deref(), |ledger| {
-        ledger.delete_transaction(&id).map_err(|e| e.to_string())
+        ledger
+            .soft_delete_transaction(&id)
+            .map_err(|e| e.to_string())
+    })
+}
+
+/// Restore soft-deleted transaction.
+pub fn restore_transaction(
+    db_path: String,
+    passphrase: Option<String>,
+    id: String,
+) -> Result<bool, String> {
+    with_ledger(&db_path, passphrase.as_deref(), |ledger| {
+        ledger.restore_transaction(&id).map_err(|e| e.to_string())
+    })
+}
+
+/// Hard-delete one row (purge).
+pub fn purge_transaction(
+    db_path: String,
+    passphrase: Option<String>,
+    id: String,
+) -> Result<bool, String> {
+    with_ledger(&db_path, passphrase.as_deref(), |ledger| {
+        ledger.purge_transaction(&id).map_err(|e| e.to_string())
+    })
+}
+
+/// Hard-delete all trash. Returns removed count.
+pub fn purge_trash_json(db_path: String, passphrase: Option<String>) -> Result<String, String> {
+    with_ledger(&db_path, passphrase.as_deref(), |ledger| {
+        let n = ledger.purge_trash().map_err(|e| e.to_string())?;
+        Ok(serde_json::json!({ "purged": n, "local_only": true }).to_string())
+    })
+}
+
+/// Soft-deleted rows as JSON array.
+pub fn list_trash_json(
+    db_path: String,
+    passphrase: Option<String>,
+    limit: u32,
+) -> Result<String, String> {
+    with_ledger(&db_path, passphrase.as_deref(), |ledger| {
+        let rows = ledger
+            .query_transactions(&TxFilter {
+                limit: limit as usize,
+                trash_only: true,
+                ..Default::default()
+            })
+            .map_err(|e| e.to_string())?;
+        serde_json::to_string(&rows).map_err(|e| e.to_string())
+    })
+}
+
+/// PRAGMA integrity + active/trash counts (local-only).
+pub fn integrity_json(db_path: String, passphrase: Option<String>) -> Result<String, String> {
+    with_ledger(&db_path, passphrase.as_deref(), |ledger| {
+        let i = ledger.integrity_check().map_err(|e| e.to_string())?;
+        serde_json::to_string(&i).map_err(|e| e.to_string())
     })
 }
 
@@ -1353,7 +1420,7 @@ mod tests {
         let last = last_transaction_json(db.display().to_string(), None).unwrap();
         assert!(last.contains("全家") || last.contains("8900"), "{last}");
         let ver = ledger_schema_version(db.display().to_string(), None).unwrap();
-        assert_eq!(ver, "3");
+        assert_eq!(ver, "4");
 
         // Attachment store: copy fixture next to ledger, set tags
         let id: serde_json::Value = serde_json::from_str(&last).unwrap();

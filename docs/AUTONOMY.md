@@ -617,6 +617,28 @@ Tag: v0.1.0-cli.11
 | P2 | Device A04 when Android available |
 | P3 | Terminal GIF asset under docs/demo/ when ready to film |
 
+## Cycle 37 — ledger schema v4 soft-delete (main axis #2)
+
+### Plan
+1. Schema **v4** `deleted_at`; forward migration; active filter on list/stats/export/dedupe
+2. Soft-delete / restore / purge / purge_trash + `integrity_check` (PRAGMA)
+3. CLI `trash` / `restore` / `purge`; `delete` → trash; doctor integrity lines
+4. FFI restore/purge/list_trash/integrity; docs ledger-schema
+
+### Verify
+- `cargo test --workspace --locked` / clippy green (soft_delete unit tests)
+
+### Result
+- Local data lifecycle without cloud tombstones; multi-device still backup/handoff files only
+- Opening any ledger auto-migrates to v4
+
+### Next seeds
+| Priority | Item |
+|----------|------|
+| P1 | FRB when Flutter present |
+| P2 | Device A04 when Android available |
+| P3 | Orphan attachment GC on purge (optional) |
+
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
 - Green tests before re-plan  

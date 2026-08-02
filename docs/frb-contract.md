@@ -57,7 +57,9 @@ See [android-ffi.md](./android-ffi.md), [ffi.md](./ffi.md).
 | **`list_tags_json`** | schema v3 tags |
 | `get_transaction_json` / `last_transaction_json` | |
 | `update_transaction_json` | tags/attachment clear = empty string |
-| `delete_transaction` | |
+| `delete_transaction` | soft-delete (v4 trash) |
+| `restore_transaction` / `purge_transaction` / `purge_trash_json` | trash lifecycle |
+| `list_trash_json` / `integrity_json` | trash + PRAGMA integrity |
 | `attach_file_json` / `attach_bytes_json` / `detach_file_json` | |
 
 ### Budgets (local soft limits)

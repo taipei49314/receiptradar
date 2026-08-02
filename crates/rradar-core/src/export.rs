@@ -353,6 +353,7 @@ pub fn transactions_from_csv(csv: &str) -> Result<Vec<Transaction>, ExportError>
             notes,
             tags,
             attachment_path,
+            deleted_at: None,
         });
     }
     Ok(out)

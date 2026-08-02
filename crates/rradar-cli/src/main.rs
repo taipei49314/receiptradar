@@ -57,6 +57,9 @@ fn main() -> ExitCode {
         "last" | "undo" => cmd_last_or_undo(&args[0], &args[1..]),
         "show" => cmd_show(&args[1..]),
         "delete" | "rm" => cmd_delete(&args[1..]),
+        "trash" => cmd_trash(&args[1..]),
+        "restore" => cmd_restore(&args[1..]),
+        "purge" => cmd_purge(&args[1..]),
         "edit" => cmd_edit(&args[1..]),
         "attach" => cmd_attach(&args[1..]),
         "detach" => cmd_detach(&args[1..]),
@@ -487,10 +490,21 @@ fn cmd_doctor(_args: &[String]) -> Result<(), String> {
         match rradar_core::Ledger::open(&db) {
             Ok(l) => {
                 let ver = l.schema_version().unwrap_or_else(|_| "?".into());
+                let trash = l.count_trash().unwrap_or(0);
                 println!(
-                    "  ledger:   ok (schema {ver}, {} transactions)",
+                    "  ledger:   ok (schema {ver}, {} active, {trash} trash)",
                     l.count().unwrap_or(-1)
                 );
+                match l.integrity_check() {
+                    Ok(i) => println!(
+                        "  integrity: pragma={} schema={} active={} trash={}",
+                        if i.pragma_ok { "ok" } else { &i.pragma_message },
+                        i.schema_version,
+                        i.active_count,
+                        i.trash_count
+                    ),
+                    Err(e) => println!("  integrity: error ({e})"),
+                }
             }
             Err(e) => println!("  ledger:   error ({e})"),
         }
@@ -2287,6 +2301,7 @@ fn cmd_list(args: &[String]) -> Result<(), String> {
         min_minor: None,
         max_minor: None,
         has_attachment,
+        ..Default::default()
     };
     if let Some(ref s) = min_amount {
         filter.min_minor = Some(
@@ -2634,7 +2649,8 @@ fn cmd_count(args: &[String]) -> Result<(), String> {
     let flags = extract_db_from_all(args)?;
     let (ledger, tmp) = open_db(&flags)?;
     let n = ledger.count().map_err(|e| e.to_string())?;
-    println!("count | {n}");
+    let trash = ledger.count_trash().map_err(|e| e.to_string())?;
+    println!("count | {n} active | {trash} trash");
     if let Some(t) = tmp {
         let _ = std::fs::remove_file(t);
     }
@@ -2657,19 +2673,114 @@ fn cmd_delete(args: &[String]) -> Result<(), String> {
     let id = args
         .iter()
         .find(|a| !a.starts_with('-'))
-        .ok_or("usage: rradar delete <id> --yes")?
+        .ok_or("usage: rradar delete <id> --yes  (soft-delete → trash; purge for hard)")?
         .clone();
     let yes = args.iter().any(|a| a == "--yes" || a == "-y");
+    let hard = args.iter().any(|a| a == "--purge" || a == "--hard");
     if !yes {
         return Err("refusing to delete without --yes".into());
     }
     let flags = extract_db_from_all(args)?;
     let (ledger, tmp) = open_db(&flags)?;
-    let ok = ledger.delete_transaction(&id).map_err(|e| e.to_string())?;
-    if !ok {
-        return Err(format!("not found: {id}"));
+    if hard {
+        let ok = ledger.purge_transaction(&id).map_err(|e| e.to_string())?;
+        if !ok {
+            return Err(format!("not found: {id}"));
+        }
+        println!("purged\t{id}");
+    } else {
+        let ok = ledger
+            .soft_delete_transaction(&id)
+            .map_err(|e| e.to_string())?;
+        if !ok {
+            return Err(format!("not found or already trashed: {id}"));
+        }
+        println!("trashed\t{id}  (rradar restore {id} | rradar purge {id} --yes)");
     }
-    println!("deleted\t{id}");
+    maybe_reseal(&flags, &ledger, tmp)?;
+    Ok(())
+}
+
+fn cmd_trash(args: &[String]) -> Result<(), String> {
+    let flags = extract_db_from_all(args)?;
+    let (ledger, tmp) = open_db(&flags)?;
+    let limit = args
+        .windows(2)
+        .find(|w| w[0] == "--limit")
+        .and_then(|w| w[1].parse().ok())
+        .unwrap_or(50usize);
+    let rows = ledger
+        .query_transactions(&TxFilter {
+            limit,
+            trash_only: true,
+            ..Default::default()
+        })
+        .map_err(|e| e.to_string())?;
+    let n = ledger.count_trash().map_err(|e| e.to_string())?;
+    if args.iter().any(|a| a == "--json") {
+        println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".into()));
+    } else {
+        println!("trash | {n} row(s)  (schema v4 soft-delete; local-only)");
+        for t in &rows {
+            println!(
+                "  {} | {} | {} {} | deleted_at={}",
+                t.id,
+                t.merchant,
+                t.currency,
+                t.amount_minor,
+                t.deleted_at.as_deref().unwrap_or("?")
+            );
+        }
+        if rows.is_empty() {
+            println!("  (empty)");
+        }
+    }
+    if let Some(t) = tmp {
+        let _ = std::fs::remove_file(t);
+    }
+    Ok(())
+}
+
+fn cmd_restore(args: &[String]) -> Result<(), String> {
+    let id = args
+        .iter()
+        .find(|a| !a.starts_with('-'))
+        .ok_or("usage: rradar restore <id>")?
+        .clone();
+    let flags = extract_db_from_all(args)?;
+    let (ledger, tmp) = open_db(&flags)?;
+    let ok = ledger.restore_transaction(&id).map_err(|e| e.to_string())?;
+    if !ok {
+        return Err(format!("not in trash: {id}"));
+    }
+    println!("restored\t{id}");
+    maybe_reseal(&flags, &ledger, tmp)?;
+    Ok(())
+}
+
+fn cmd_purge(args: &[String]) -> Result<(), String> {
+    let yes = args.iter().any(|a| a == "--yes" || a == "-y");
+    if !yes {
+        return Err("refusing to purge without --yes (hard delete)".into());
+    }
+    let all = args.iter().any(|a| a == "--all" || a == "--trash");
+    let flags = extract_db_from_all(args)?;
+    let (ledger, tmp) = open_db(&flags)?;
+    if all {
+        let n = ledger.purge_trash().map_err(|e| e.to_string())?;
+        println!("purged trash | {n}");
+    } else {
+        let id = args
+            .iter()
+            .find(|a| !a.starts_with('-') && *a != "purge")
+            .ok_or("usage: rradar purge <id> --yes | rradar purge --all --yes")?
+            .clone();
+        let ok = ledger.purge_transaction(&id).map_err(|e| e.to_string())?;
+        if !ok {
+            return Err(format!("not found: {id}"));
+        }
+        println!("purged\t{id}");
+    }
     maybe_reseal(&flags, &ledger, tmp)?;
     Ok(())
 }
@@ -4212,10 +4323,14 @@ doctor   health check (schema version, engines, models)
 path     print home + db paths
 demo     one-command closed-loop from fixtures/ (recordable)
   RRADAR_HOME / RRADAR_DB / RRADAR_DEFAULT_CURRENCY override defaults.",
-        "edit" | "delete" | "show" | "rm" => "\
+        "edit" | "delete" | "show" | "rm" | "trash" | "restore" | "purge" => "\
 show <id>
 edit <id> [--merchant --amount --currency --category --notes --date] [--tags T] [--clear-tags]
-delete <id> --yes
+delete <id> --yes           soft-delete (schema v4 trash)
+delete <id> --yes --purge   hard-delete one row
+trash [--json] [--limit N]  list soft-deleted
+restore <id>                undelete
+purge <id> --yes | purge --all --yes
   edit/delete require --db for non-default ledgers.",
         other => {
             return Err(format!(
@@ -4266,7 +4381,10 @@ Commands:
   edit <id>            Edit merchant/amount/category/notes/date/tags
   attach <id> <file>   Store receipt blob next to ledger (schema v3)
   detach <id>          Clear attachment_path [--delete-file]
-  delete <id> --yes    Delete transaction (alias: rm)
+  delete <id> --yes    Soft-delete → trash (alias: rm; --purge hard)
+  trash                List soft-deleted rows
+  restore <id>         Undelete from trash
+  purge <id>|--all --yes Hard-delete trash
   stats                Per-currency totals; --by-category for breakdown
   top                  Top merchants by spend (one currency)
   report               Markdown monthly or annual report (-o file.md)

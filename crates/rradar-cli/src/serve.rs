@@ -385,6 +385,7 @@ fn handle(mut stream: TcpStream, st: &State) -> Result<(), String> {
                     Some("0") | Some("false") | Some("no") => Some(false),
                     _ => None,
                 },
+                ..Default::default()
             };
             let rows = ledger
                 .query_transactions(&filter)

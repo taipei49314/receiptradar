@@ -48,7 +48,9 @@ cargo build -p rradar-ffi --release
 | `list_transactions_json` | List |
 | `get_transaction_json` | Show one |
 | `last_transaction_json` | Last confirmed |
-| `delete_transaction` | Delete |
+| `delete_transaction` | Soft-delete (v4 trash) |
+| `restore_transaction` / `purge_transaction` / `purge_trash_json` | Trash lifecycle |
+| `list_trash_json` / `integrity_json` | Trash list + PRAGMA integrity |
 | `update_transaction_json` | Edit fields (+ **tags**, **attachment_path**; empty string clears) |
 | `attach_file_json` | Copy local file into `{db}/attachments/{id}/` + set path |
 | `attach_bytes_json` | Store camera/in-memory bytes as attachment |

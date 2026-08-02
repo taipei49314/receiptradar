@@ -14,6 +14,7 @@
 - Local HTTP API expanded for product demo automation (capabilities, paths, attach, process flags)
 
 ### Added
+- **Ledger schema v4 soft-delete (axis #2):** `deleted_at` trash/restore/purge; stats/list/export skip trash; `rradar trash|restore|purge`; doctor integrity; FFI trash surface
 - **Recordable synthetic photo matrix (axis #5):** `tools/gen-receipt-png` regenerates real PNG receipts (familymart/7-11/starbucks/mcdonalds); demo step CSV import + backup merge multi-device path; 4 sidecar fixtures ONNX-capable
 - **Mobile FFI transfer surface (axis #3):** `ocr_lines_*_json`, `import_json_json`, `backup_info|verify|merge_json`; capture options `max_edge`/`force_ocr`/`low_confidence_retry`; Dart Transfer screen + capability flags (`ocr_raw`, `csv_import`, `backup_merge`, …)
 - **Real image preprocess + ONNX product path (axis #1):** decode JPEG/PNG/WebP/GIF; max-edge 1280 downscale + low-conf retry at 1600; `rradar ocr` raw line dump; `rradar bench` A04 harness (`force_ocr`, p50/p95); desktop ONNX warm p50 ~115 ms recorded in spike-ocr-size.md

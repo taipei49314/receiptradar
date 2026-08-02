@@ -12,7 +12,15 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 /// Latest ledger schema this binary knows how to open and migrate **to**.
-pub const LEDGER_SCHEMA_VERSION: u32 = 3;
+pub const LEDGER_SCHEMA_VERSION: u32 = 4;
+
+/// Shared SELECT list for [`Transaction`] rows (includes schema v4 `deleted_at`).
+const TX_COLS: &str = r#"id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
+                      category, invoice_id, source_path, overall_confidence, content_hash, notes,
+                      tags, attachment_path, deleted_at"#;
+
+/// Active (not soft-deleted) rows — schema v4+.
+const ACTIVE: &str = "(deleted_at IS NULL)";
 
 const SCHEMA_BASE: &str = r#"
 PRAGMA journal_mode=WAL;
@@ -82,6 +90,9 @@ pub struct Transaction {
     /// Optional path to receipt image/file on device (schema v3+).
     #[serde(default)]
     pub attachment_path: Option<String>,
+    /// Soft-delete timestamp (schema v4+). `None` = active in ledger/stats/export.
+    #[serde(default)]
+    pub deleted_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -100,6 +111,17 @@ pub struct CategoryStat {
     pub category: String,
     pub total_minor: i64,
     pub count: i64,
+}
+
+/// Result of [`Ledger::integrity_check`] (local-only).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LedgerIntegrity {
+    pub pragma_ok: bool,
+    pub pragma_message: String,
+    pub schema_version: u32,
+    pub active_count: i64,
+    pub trash_count: i64,
+    pub path: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,6 +185,10 @@ pub struct TxFilter {
     pub max_minor: Option<i64>,
     /// `Some(true)` = has attachment path; `Some(false)` = none.
     pub has_attachment: Option<bool>,
+    /// When true, only soft-deleted (trash) rows. Default false = active only.
+    pub trash_only: bool,
+    /// When true, include both active and trash (admin). Overrides `trash_only`.
+    pub include_deleted: bool,
 }
 
 pub struct Ledger {
@@ -227,6 +253,7 @@ impl Ledger {
             match next {
                 2 => self.migrate_v1_to_v2()?,
                 3 => self.migrate_v2_to_v3()?,
+                4 => self.migrate_v3_to_v4()?,
                 other => {
                     return Err(LedgerError::Migration {
                         to: other,
@@ -289,6 +316,26 @@ impl Ledger {
         self.meta_set("schema_version", "3")?;
         self.meta_set("app_version", VERSION)?;
         self.meta_set("migrated_to_3_at", &crate::pipeline::utc_now_iso())?;
+        Ok(())
+    }
+
+    /// v4: soft-delete column for trash / restore without cloud tombstones.
+    fn migrate_v3_to_v4(&mut self) -> Result<(), LedgerError> {
+        if !self.column_exists("transactions", "deleted_at")? {
+            self.conn
+                .execute("ALTER TABLE transactions ADD COLUMN deleted_at TEXT", [])
+                .map_err(|e| LedgerError::Migration {
+                    to: 4,
+                    detail: e.to_string(),
+                })?;
+        }
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tx_deleted ON transactions(deleted_at)",
+            [],
+        )?;
+        self.meta_set("schema_version", "4")?;
+        self.meta_set("app_version", VERSION)?;
+        self.meta_set("migrated_to_4_at", &crate::pipeline::utc_now_iso())?;
         Ok(())
     }
 
@@ -382,8 +429,8 @@ impl Ledger {
             r#"INSERT INTO transactions(
                 id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
                 category, invoice_id, source_path, overall_confidence, content_hash, notes, raw_text, draft_json,
-                updated_at, tags, attachment_path
-            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)"#,
+                updated_at, tags, attachment_path, deleted_at
+            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)"#,
             params![
                 id,
                 confirmed_at,
@@ -403,6 +450,7 @@ impl Ledger {
                 confirmed_at,
                 Option::<String>::None,
                 Option::<String>::None,
+                Option::<String>::None, // deleted_at
             ],
         )?;
 
@@ -435,6 +483,7 @@ impl Ledger {
                              AND amount_minor = ?2
                              AND currency = ?3
                              AND substr(transacted_at,1,10) = ?4
+                             AND (deleted_at IS NULL)
                            LIMIT 1"#,
                         params![
                             inv.value,
@@ -463,7 +512,7 @@ impl Ledger {
                 let row: Option<(String,)> = self
                     .conn
                     .query_row(
-                        "SELECT id FROM transactions WHERE content_hash = ?1 LIMIT 1",
+                        "SELECT id FROM transactions WHERE content_hash = ?1 AND (deleted_at IS NULL) LIMIT 1",
                         params![h],
                         |r| Ok((r.get(0)?,)),
                     )
@@ -484,10 +533,7 @@ impl Ledger {
     pub fn get_transaction(&self, id: &str) -> Result<Transaction, LedgerError> {
         self.conn
             .query_row(
-                r#"SELECT id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
-                          category, invoice_id, source_path, overall_confidence, content_hash, notes,
-                          tags, attachment_path
-                   FROM transactions WHERE id = ?1"#,
+                &format!("SELECT {TX_COLS} FROM transactions WHERE id = ?1"),
                 params![id],
                 row_to_tx,
             )
@@ -502,14 +548,11 @@ impl Ledger {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<Transaction>, LedgerError> {
-        let mut stmt = self.conn.prepare(
-            r#"SELECT id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
-                      category, invoice_id, source_path, overall_confidence, content_hash, notes,
-                      tags, attachment_path
-               FROM transactions
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {TX_COLS} FROM transactions WHERE {ACTIVE}
                ORDER BY transacted_at DESC, confirmed_at DESC
-               LIMIT ?1 OFFSET ?2"#,
-        )?;
+               LIMIT ?1 OFFSET ?2"
+        ))?;
         let rows = stmt.query_map(params![limit as i64, offset as i64], row_to_tx)?;
         let mut out = Vec::new();
         for r in rows {
@@ -518,10 +561,23 @@ impl Ledger {
         Ok(out)
     }
 
+    /// Active (non-trashed) row count.
     pub fn count(&self) -> Result<i64, LedgerError> {
-        let n: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM transactions", [], |r| r.get(0))?;
+        let n: i64 = self.conn.query_row(
+            &format!("SELECT COUNT(*) FROM transactions WHERE {ACTIVE}"),
+            [],
+            |r| r.get(0),
+        )?;
+        Ok(n)
+    }
+
+    /// Soft-deleted row count.
+    pub fn count_trash(&self) -> Result<i64, LedgerError> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM transactions WHERE deleted_at IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )?;
         Ok(n)
     }
 
@@ -532,13 +588,13 @@ impl Ledger {
         month: u32,
     ) -> Result<Vec<CurrencyMonthStat>, LedgerError> {
         let prefix = format!("{year:04}-{month:02}");
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare(&format!(
             r#"SELECT currency, SUM(amount_minor), COUNT(*)
                FROM transactions
-               WHERE substr(transacted_at,1,7) = ?1
+               WHERE substr(transacted_at,1,7) = ?1 AND {ACTIVE}
                GROUP BY currency
-               ORDER BY currency"#,
-        )?;
+               ORDER BY currency"#
+        ))?;
         let rows = stmt.query_map(params![prefix], |r| {
             Ok(CurrencyMonthStat {
                 currency: r.get(0)?,
@@ -559,11 +615,65 @@ impl Ledger {
         self.list_transactions(100_000, 0)
     }
 
-    pub fn delete_transaction(&self, id: &str) -> Result<bool, LedgerError> {
+    /// Soft-delete (schema v4). Returns false if id missing or already trashed.
+    pub fn soft_delete_transaction(&self, id: &str) -> Result<bool, LedgerError> {
+        let now = crate::pipeline::utc_now_iso();
+        let n = self.conn.execute(
+            &format!(
+                "UPDATE transactions SET deleted_at = ?2, updated_at = ?2 WHERE id = ?1 AND {ACTIVE}"
+            ),
+            params![id, now],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Restore a soft-deleted row. Returns false if not in trash.
+    pub fn restore_transaction(&self, id: &str) -> Result<bool, LedgerError> {
+        let now = crate::pipeline::utc_now_iso();
+        let n = self.conn.execute(
+            "UPDATE transactions SET deleted_at = NULL, updated_at = ?2 WHERE id = ?1 AND deleted_at IS NOT NULL",
+            params![id, now],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Hard-delete one row (purge from trash or force). Prefer soft-delete for UX.
+    pub fn purge_transaction(&self, id: &str) -> Result<bool, LedgerError> {
         let n = self
             .conn
             .execute("DELETE FROM transactions WHERE id = ?1", params![id])?;
         Ok(n > 0)
+    }
+
+    /// Hard-delete all soft-deleted rows. Returns count removed.
+    pub fn purge_trash(&self) -> Result<usize, LedgerError> {
+        let n = self
+            .conn
+            .execute("DELETE FROM transactions WHERE deleted_at IS NOT NULL", [])?;
+        Ok(n)
+    }
+
+    /// Soft-delete alias for API stability (`delete` CLI → trash).
+    pub fn delete_transaction(&self, id: &str) -> Result<bool, LedgerError> {
+        self.soft_delete_transaction(id)
+    }
+
+    /// Local integrity probe (no network).
+    pub fn integrity_check(&self) -> Result<LedgerIntegrity, LedgerError> {
+        let ok: String = self
+            .conn
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
+        let active = self.count()?;
+        let trash = self.count_trash()?;
+        let schema = self.schema_version_u32()?;
+        Ok(LedgerIntegrity {
+            pragma_ok: ok.eq_ignore_ascii_case("ok"),
+            pragma_message: ok,
+            schema_version: schema,
+            active_count: active,
+            trash_count: trash,
+            path: self.path.display().to_string(),
+        })
     }
 
     /// Insert a fully-formed transaction (import / manual). Fails if id exists.
@@ -573,8 +683,8 @@ impl Ledger {
             r#"INSERT INTO transactions(
                 id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
                 category, invoice_id, source_path, overall_confidence, content_hash, notes, raw_text, draft_json,
-                updated_at, tags, attachment_path
-            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)"#,
+                updated_at, tags, attachment_path, deleted_at
+            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)"#,
             params![
                 tx.id,
                 tx.confirmed_at,
@@ -594,6 +704,7 @@ impl Ledger {
                 updated,
                 tx.tags,
                 tx.attachment_path,
+                tx.deleted_at,
             ],
         )?;
         Ok(())
@@ -703,12 +814,14 @@ impl Ledger {
 
     /// Rich query: tags, category, date range, amount bounds, attachment flag.
     pub fn query_transactions(&self, f: &TxFilter) -> Result<Vec<Transaction>, LedgerError> {
-        let mut sql = String::from(
-            r#"SELECT id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
-                      category, invoice_id, source_path, overall_confidence, content_hash, notes,
-                      tags, attachment_path
-               FROM transactions WHERE 1=1"#,
-        );
+        let mut sql = format!("SELECT {TX_COLS} FROM transactions WHERE 1=1");
+        if f.include_deleted {
+            // no delete filter
+        } else if f.trash_only {
+            sql.push_str(" AND deleted_at IS NOT NULL");
+        } else {
+            sql.push_str(&format!(" AND {ACTIVE}"));
+        }
         let mut vals: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
         if let Some(ref c) = f.currency {
@@ -779,9 +892,9 @@ impl Ledger {
 
     /// Distinct tag tokens across the ledger (sorted).
     pub fn list_tags(&self) -> Result<Vec<String>, LedgerError> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT tags FROM transactions WHERE tags IS NOT NULL AND tags != ''")?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT tags FROM transactions WHERE tags IS NOT NULL AND tags != '' AND {ACTIVE}"
+        ))?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         let mut set = std::collections::BTreeSet::new();
         for r in rows {
@@ -802,13 +915,14 @@ impl Ledger {
         from: &str,
         to: &str,
     ) -> Result<Vec<CurrencyMonthStat>, LedgerError> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare(&format!(
             r#"SELECT currency, SUM(amount_minor), COUNT(*)
                FROM transactions
                WHERE substr(transacted_at,1,10) >= ?1 AND substr(transacted_at,1,10) <= ?2
+                 AND {ACTIVE}
                GROUP BY currency
-               ORDER BY currency"#,
-        )?;
+               ORDER BY currency"#
+        ))?;
         let rows = stmt.query_map(params![from, to], |r| {
             Ok(CurrencyMonthStat {
                 currency: r.get(0)?,
@@ -831,26 +945,30 @@ impl Ledger {
         currency: &str,
         year_month: Option<&str>,
     ) -> Result<Vec<CategoryStat>, LedgerError> {
-        let (sql, bind_ym): (&str, Option<&str>) = if let Some(ym) = year_month {
+        let (sql, bind_ym): (String, Option<&str>) = if let Some(ym) = year_month {
             (
-                r#"SELECT currency, category, SUM(amount_minor), COUNT(*)
+                format!(
+                    r#"SELECT currency, category, SUM(amount_minor), COUNT(*)
                    FROM transactions
-                   WHERE currency = ?1 AND substr(transacted_at,1,7) = ?2
+                   WHERE currency = ?1 AND substr(transacted_at,1,7) = ?2 AND {ACTIVE}
                    GROUP BY currency, category
-                   ORDER BY SUM(amount_minor) DESC"#,
+                   ORDER BY SUM(amount_minor) DESC"#
+                ),
                 Some(ym),
             )
         } else {
             (
-                r#"SELECT currency, category, SUM(amount_minor), COUNT(*)
+                format!(
+                    r#"SELECT currency, category, SUM(amount_minor), COUNT(*)
                    FROM transactions
-                   WHERE currency = ?1
+                   WHERE currency = ?1 AND {ACTIVE}
                    GROUP BY currency, category
-                   ORDER BY SUM(amount_minor) DESC"#,
+                   ORDER BY SUM(amount_minor) DESC"#
+                ),
                 None,
             )
         };
-        let mut stmt = self.conn.prepare(sql)?;
+        let mut stmt = self.conn.prepare(&sql)?;
         let map = |r: &rusqlite::Row<'_>| {
             Ok(CategoryStat {
                 currency: r.get(0)?,
@@ -877,14 +995,14 @@ impl Ledger {
         currency: &str,
         limit: usize,
     ) -> Result<Vec<(String, i64, i64)>, LedgerError> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare(&format!(
             r#"SELECT merchant, SUM(amount_minor), COUNT(*)
                FROM transactions
-               WHERE currency = ?1
+               WHERE currency = ?1 AND {ACTIVE}
                GROUP BY merchant
                ORDER BY SUM(amount_minor) DESC
-               LIMIT ?2"#,
-        )?;
+               LIMIT ?2"#
+        ))?;
         let rows = stmt.query_map(params![currency, limit as i64], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -904,17 +1022,16 @@ impl Ledger {
         Ok(n)
     }
 
-    /// Most recently confirmed transaction (by confirmed_at, then id).
+    /// Most recently confirmed **active** transaction (by confirmed_at, then id).
     pub fn last_transaction(&self) -> Result<Option<Transaction>, LedgerError> {
         let row = self
             .conn
             .query_row(
-                r#"SELECT id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
-                          category, invoice_id, source_path, overall_confidence, content_hash, notes,
-                          tags, attachment_path
-                   FROM transactions
+                &format!(
+                    "SELECT {TX_COLS} FROM transactions WHERE {ACTIVE}
                    ORDER BY confirmed_at DESC, id DESC
-                   LIMIT 1"#,
+                   LIMIT 1"
+                ),
                 [],
                 row_to_tx,
             )
@@ -929,15 +1046,12 @@ impl Ledger {
         limit: usize,
     ) -> Result<Vec<Transaction>, LedgerError> {
         let prefix = format!("{year:04}-{month:02}");
-        let mut stmt = self.conn.prepare(
-            r#"SELECT id, confirmed_at, transacted_at, merchant, amount_minor, currency, exponent,
-                      category, invoice_id, source_path, overall_confidence, content_hash, notes,
-                      tags, attachment_path
-               FROM transactions
-               WHERE substr(transacted_at,1,7) = ?1
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {TX_COLS} FROM transactions
+               WHERE substr(transacted_at,1,7) = ?1 AND {ACTIVE}
                ORDER BY transacted_at DESC, confirmed_at DESC
-               LIMIT ?2"#,
-        )?;
+               LIMIT ?2"
+        ))?;
         let rows = stmt.query_map(params![prefix, limit as i64], row_to_tx)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
@@ -970,12 +1084,13 @@ impl Ledger {
 
     /// All-time per-currency totals (no cross-currency sum).
     pub fn stats_by_currency_all(&self) -> Result<Vec<CurrencyMonthStat>, LedgerError> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare(&format!(
             r#"SELECT currency, SUM(amount_minor), COUNT(*)
                FROM transactions
+               WHERE {ACTIVE}
                GROUP BY currency
-               ORDER BY currency"#,
-        )?;
+               ORDER BY currency"#
+        ))?;
         let rows = stmt.query_map([], |r| {
             Ok(CurrencyMonthStat {
                 currency: r.get(0)?,
@@ -995,13 +1110,13 @@ impl Ledger {
     /// Per-currency totals for a full calendar year (no cross-currency sum).
     pub fn stats_by_currency_year(&self, year: i32) -> Result<Vec<CurrencyMonthStat>, LedgerError> {
         let prefix = format!("{year:04}");
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare(&format!(
             r#"SELECT currency, SUM(amount_minor), COUNT(*)
                FROM transactions
-               WHERE substr(transacted_at,1,4) = ?1
+               WHERE substr(transacted_at,1,4) = ?1 AND {ACTIVE}
                GROUP BY currency
-               ORDER BY currency"#,
-        )?;
+               ORDER BY currency"#
+        ))?;
         let rows = stmt.query_map(params![prefix], |r| {
             Ok(CurrencyMonthStat {
                 currency: r.get(0)?,
@@ -1024,16 +1139,16 @@ impl Ledger {
         year: i32,
     ) -> Result<Vec<CurrencyMonthStat>, LedgerError> {
         let prefix = format!("{year:04}");
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare(&format!(
             r#"SELECT currency,
                       CAST(substr(transacted_at,6,2) AS INTEGER),
                       SUM(amount_minor),
                       COUNT(*)
                FROM transactions
-               WHERE substr(transacted_at,1,4) = ?1
+               WHERE substr(transacted_at,1,4) = ?1 AND {ACTIVE}
                GROUP BY currency, substr(transacted_at,1,7)
-               ORDER BY currency, substr(transacted_at,1,7)"#,
-        )?;
+               ORDER BY currency, substr(transacted_at,1,7)"#
+        ))?;
         let rows = stmt.query_map(params![prefix], |r| {
             let month: i64 = r.get(1)?;
             Ok(CurrencyMonthStat {
@@ -1055,7 +1170,9 @@ impl Ledger {
     pub fn rewrite_merchant(&self, from: &str, to: &str) -> Result<usize, LedgerError> {
         let now = crate::pipeline::utc_now_iso();
         let n = self.conn.execute(
-            "UPDATE transactions SET merchant = ?2, updated_at = ?3 WHERE merchant = ?1",
+            &format!(
+                "UPDATE transactions SET merchant = ?2, updated_at = ?3 WHERE merchant = ?1 AND {ACTIVE}"
+            ),
             params![from, to, now],
         )?;
         Ok(n)
@@ -1094,6 +1211,7 @@ fn row_to_tx(r: &rusqlite::Row<'_>) -> rusqlite::Result<Transaction> {
         notes: r.get(12)?,
         tags: r.get(13).ok().flatten(),
         attachment_path: r.get(14).ok().flatten(),
+        deleted_at: r.get(15).ok().flatten(),
     })
 }
 
@@ -1245,8 +1363,43 @@ mod tests {
         assert_eq!(u.merchant, "新店名");
         assert_eq!(u.amount_minor, 600);
         assert_eq!(u.notes.as_deref(), Some("note"));
+        // Soft-delete (v4): row leaves active set but remains in trash.
         assert!(db.delete_transaction("txdel").unwrap());
         assert_eq!(db.count().unwrap(), 0);
+        assert_eq!(db.count_trash().unwrap(), 1);
+        assert!(db.restore_transaction("txdel").unwrap());
+        assert_eq!(db.count().unwrap(), 1);
+        assert!(db.soft_delete_transaction("txdel").unwrap());
+        assert!(db.purge_transaction("txdel").unwrap());
+        assert_eq!(db.count_trash().unwrap(), 0);
+    }
+
+    #[test]
+    fn soft_delete_excludes_from_stats_and_integrity() {
+        let db = Ledger::open_in_memory().unwrap();
+        assert_eq!(db.schema_version_u32().unwrap(), LEDGER_SCHEMA_VERSION);
+        db.confirm_draft(&sample_draft("a", None, 1000), None, None, false)
+            .unwrap();
+        db.confirm_draft(&sample_draft("b", None, 2000), None, None, false)
+            .unwrap();
+        assert!(db.soft_delete_transaction("a").unwrap());
+        assert_eq!(db.count().unwrap(), 1);
+        let stats = db.stats_by_currency_month(2024, 5).unwrap();
+        assert_eq!(stats[0].total_minor, 2000);
+        let trash = db
+            .query_transactions(&TxFilter {
+                limit: 10,
+                trash_only: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(trash.len(), 1);
+        assert_eq!(trash[0].id, "a");
+        let integ = db.integrity_check().unwrap();
+        assert!(integ.pragma_ok);
+        assert_eq!(integ.active_count, 1);
+        assert_eq!(integ.trash_count, 1);
+        assert_eq!(db.purge_trash().unwrap(), 1);
     }
 
     #[test]
