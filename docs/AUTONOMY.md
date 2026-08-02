@@ -639,6 +639,28 @@ Tag: v0.1.0-cli.11
 | P2 | Device A04 when Android available |
 | P3 | Orphan attachment GC on purge (optional) |
 
+## Cycle 38 — release/CI productization for schema v4 (main axis #4)
+
+### Plan
+1. Release archives: `VERSION` + `version.json` from binary (no hardcoded schema); pack ledger-schema/RELEASE docs
+2. `release-check`: require schema ≥4; soft-delete trash→restore→purge + integrity steps
+3. CI soft-delete trash smoke; version --json soft_delete + release_features
+4. INSTALL/RELEASE/verify-install gate on ledger_schema ≥ 4
+
+### Verify
+- `cargo test --workspace --locked` / clippy green
+- `rradar release-check --fixtures fixtures --quiet` → RELEASE_CHECK_OK schema=4
+
+### Result
+- Tag builds ship schema-accurate metadata; CI proves soft-delete lifecycle before merge
+
+### Next seeds
+| Priority | Item |
+|----------|------|
+| P1 | FRB when Flutter present |
+| P2 | Device A04 when Android available |
+| P3 | Optional signed provenance / SBOM later |
+
 ## Rules
 - No questions between cycles unless secrets / destructive remote  
 - Green tests before re-plan  

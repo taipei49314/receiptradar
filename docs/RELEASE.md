@@ -66,12 +66,17 @@ git push origin v0.1.0-cli.N
 | fmt / clippy / test `--locked` | Correctness |
 | `rradar-ffi` tests | Mobile contract |
 | cli smoke + engines | Product path |
+| **soft-delete trash smoke** | schema v4 trash → restore |
 | demo + api-smoke | Closed loops |
-| **release-check** | Pre-flight gate (process/demo/api) |
+| **release-check** | Pre-flight (process, soft-delete, integrity, demo, api) |
 | **fixtures verify** | Offline extract matrix totals |
 | **release binary smoke** | `cargo build --release` + release-check + demo |
 | network audit | No surprise egress in source |
 | supply-chain python + **cargo-deny** | Dual license/source gate |
+
+### Release archives
+
+`VERSION` / `version.json` are written from **`rradar version --json`** at package time (ledger_schema must match the binary; never hardcode). Includes `docs/ledger-schema.md`.
 
 ## Install from release
 

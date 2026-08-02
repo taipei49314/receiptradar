@@ -47,7 +47,17 @@ Tags matching `v*` run [.github/workflows/release.yml](../.github/workflows/rele
 | `rradar-x86_64-apple-darwin.tar.gz` | macOS Intel |
 | `rradar-aarch64-apple-darwin.tar.gz` | macOS Apple Silicon |
 
-Each archive includes `LICENSE`, `README.md`, and a `VERSION` file. A sibling `*.sha256` checksum is published.
+Each archive includes:
+
+| File | Purpose |
+|------|---------|
+| `rradar` / `rradar.exe` | CLI binary (mock OCR default) |
+| `VERSION` | tag, crate_version, **ledger_schema**, soft_delete (from `version --json`) |
+| `version.json` | machine-readable identity |
+| `LICENSE`, `THIRD_PARTY_NOTICES`, `CHANGELOG.md` | legal / history |
+| `INSTALL.md`, `cli.md`, `privacy.md`, `ledger-schema.md`, `RELEASE.md` | docs |
+
+A sibling `*.sha256` checksum is published. Schema **v4** supports soft-delete trash (no cloud).
 
 ### Linux / macOS
 
@@ -65,7 +75,7 @@ Or use the helper:
 
 ```bash
 ./scripts/install-from-release.sh          # auto-detect OS/arch
-./scripts/install-from-release.sh v0.1.0-cli.17
+./scripts/install-from-release.sh v0.1.0-cli.30
 ```
 
 ### Windows (PowerShell)
@@ -73,7 +83,7 @@ Or use the helper:
 ```powershell
 powershell -File scripts/install-from-release.ps1
 # or pin a tag:
-powershell -File scripts/install-from-release.ps1 -Tag v0.1.0-cli.17
+powershell -File scripts/install-from-release.ps1 -Tag v0.1.0-cli.30
 rradar version --long
 rradar engines
 powershell -File scripts/verify-install.ps1

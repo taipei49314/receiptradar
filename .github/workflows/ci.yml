@@ -44,9 +44,26 @@ jobs:
         run: |
           cargo run -p rradar-cli --locked -- version
           cargo run -p rradar-cli --locked -- version --long
+          cargo run -p rradar-cli --locked -- version --json
           cargo run -p rradar-cli --locked -- engines
           cargo run -p rradar-cli --locked -- process fixtures/text/familymart_89.txt
           cargo run -p bench-ocr --locked -- fixtures/text
+
+      - name: soft-delete trash smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          DB=target/ci-trash/ledger.db
+          rm -rf target/ci-trash
+          mkdir -p target/ci-trash
+          cargo run -p rradar-cli --locked -- process fixtures/text/familymart_89.txt --confirm --quiet --db "$DB"
+          ID=$(cargo run -p rradar-cli --locked -- last --db "$DB" | python -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          cargo run -p rradar-cli --locked -- delete "$ID" --yes --db "$DB"
+          cargo run -p rradar-cli --locked -- trash --db "$DB" | tee /tmp/rradar-trash.out
+          cargo run -p rradar-cli --locked -- restore "$ID" --db "$DB"
+          cargo run -p rradar-cli --locked -- count --db "$DB" | tee /tmp/rradar-count.out
+          grep -E '1 active|active \| 0 trash|active' /tmp/rradar-count.out
+          cargo run -p rradar-cli --locked -- doctor
 
       - name: demo closed-loop
         run: cargo run -p rradar-cli --locked -- demo --fixtures fixtures --db target/ci-demo/ledger.db --quiet

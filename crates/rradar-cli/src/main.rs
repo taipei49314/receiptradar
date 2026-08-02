@@ -116,6 +116,7 @@ fn cmd_version(args: &[String]) -> Result<(), String> {
                 "product_id": PRODUCT_ID,
                 "version": VERSION,
                 "ledger_schema": LEDGER_SCHEMA_VERSION,
+                "soft_delete": LEDGER_SCHEMA_VERSION >= 4,
                 "onnx_feature": ready.feature_enabled,
                 "onnx_ready": ready.ready_for_inference,
                 "auto_engine": rradar_ocr::resolve_auto_engine_name(),
@@ -123,6 +124,14 @@ fn cmd_version(args: &[String]) -> Result<(), String> {
                 "os": env::consts::OS,
                 "arch": env::consts::ARCH,
                 "policy": "local-first; no official cloud relay",
+                "release_features": [
+                    "mock-ocr",
+                    "soft-delete",
+                    "backup",
+                    "handoff",
+                    "csv-import",
+                    "local-http",
+                ],
             })
         );
         return Ok(());
@@ -130,6 +139,14 @@ fn cmd_version(args: &[String]) -> Result<(), String> {
     println!("{PRODUCT_ID} {VERSION}");
     if long {
         println!("ledger_schema | {LEDGER_SCHEMA_VERSION}");
+        println!(
+            "soft_delete   | {}",
+            if LEDGER_SCHEMA_VERSION >= 4 {
+                "yes (trash/restore/purge)"
+            } else {
+                "no"
+            }
+        );
         println!(
             "onnx_feature  | {}",
             if ready.feature_enabled {
@@ -236,8 +253,8 @@ fn cmd_release_check(args: &[String]) -> Result<(), String> {
     );
     step(
         "ledger_schema",
-        LEDGER_SCHEMA_VERSION >= 3,
-        &format!("supports v{LEDGER_SCHEMA_VERSION}"),
+        LEDGER_SCHEMA_VERSION >= 4,
+        &format!("supports v{LEDGER_SCHEMA_VERSION} (soft-delete)"),
     );
 
     // 2) Engines catalog
@@ -316,6 +333,90 @@ fn cmd_release_check(args: &[String]) -> Result<(), String> {
             false,
             &format!("fixture missing: {} (pass --fixtures)", fam.display()),
         );
+    }
+
+    // 4b) Soft-delete lifecycle + integrity (schema v4, local-only)
+    {
+        let home =
+            std::env::temp_dir().join(format!("rradar-release-check-trash-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&home);
+        let db = home.join("ledger.db");
+        match rradar_core::Ledger::open(&db) {
+            Ok(ledger) => {
+                let eng = engine_by_name("mock").map_err(|e| e.to_string())?;
+                let cats = category_engine_with_packs();
+                let draft_ok = if fam.is_file() {
+                    match process_path(
+                        &fam,
+                        eng.as_ref(),
+                        &cats,
+                        ProcessOptions {
+                            default_currency: Iso4217::TWD,
+                            ..Default::default()
+                        },
+                    ) {
+                        Ok(d) => {
+                            match ledger.confirm_draft(&d, None, Some("release-check"), false) {
+                                Ok(r) if r.inserted => Some(r.transaction.id),
+                                Ok(_) => None,
+                                Err(e) => {
+                                    step("soft_delete", false, &format!("confirm: {e}"));
+                                    None
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            step("soft_delete", false, &format!("process: {e}"));
+                            None
+                        }
+                    }
+                } else {
+                    // Minimal synthetic draft path when fixtures missing.
+                    None
+                };
+                if let Some(id) = draft_ok {
+                    let soft = ledger.soft_delete_transaction(&id).unwrap_or(false);
+                    let active0 = ledger.count().unwrap_or(-1) == 0;
+                    let trash1 = ledger.count_trash().unwrap_or(0) == 1;
+                    let restored = ledger.restore_transaction(&id).unwrap_or(false);
+                    let active1 = ledger.count().unwrap_or(0) == 1;
+                    let purged = ledger.purge_transaction(&id).unwrap_or(false);
+                    let integ = ledger.integrity_check().ok();
+                    let integ_ok = integ.as_ref().map(|i| i.pragma_ok).unwrap_or(false);
+                    let ok = soft && active0 && trash1 && restored && active1 && purged && integ_ok;
+                    step(
+                        "soft_delete",
+                        ok,
+                        &format!(
+                            "trash→restore→purge integrity={}",
+                            integ
+                                .as_ref()
+                                .map(|i| i.pragma_message.as_str())
+                                .unwrap_or("?")
+                        ),
+                    );
+                    step(
+                        "integrity",
+                        integ_ok,
+                        &format!(
+                            "schema={} active={}",
+                            integ.as_ref().map(|i| i.schema_version).unwrap_or(0),
+                            integ.as_ref().map(|i| i.active_count).unwrap_or(-1)
+                        ),
+                    );
+                } else if fam.is_file() {
+                    // already stepped fail
+                } else {
+                    step("soft_delete", false, "no fixture for trash smoke");
+                    step("integrity", false, "skipped");
+                }
+            }
+            Err(e) => {
+                step("soft_delete", false, &e.to_string());
+                step("integrity", false, "ledger open failed");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     // 5) Demo closed-loop
@@ -2718,7 +2819,10 @@ fn cmd_trash(args: &[String]) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let n = ledger.count_trash().map_err(|e| e.to_string())?;
     if args.iter().any(|a| a == "--json") {
-        println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".into()));
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".into())
+        );
     } else {
         println!("trash | {n} row(s)  (schema v4 soft-delete; local-only)");
         for t in &rows {

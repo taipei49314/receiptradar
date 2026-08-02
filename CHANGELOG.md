@@ -14,6 +14,7 @@
 - Local HTTP API expanded for product demo automation (capabilities, paths, attach, process flags)
 
 ### Added
+- **Release/CI schema v4 productization (axis #4):** release `VERSION`/`version.json` from binary; pack ledger-schema docs; release-check soft-delete+integrity; CI trash smoke; verify-install requires schema ≥ 4
 - **Ledger schema v4 soft-delete (axis #2):** `deleted_at` trash/restore/purge; stats/list/export skip trash; `rradar trash|restore|purge`; doctor integrity; FFI trash surface
 - **Recordable synthetic photo matrix (axis #5):** `tools/gen-receipt-png` regenerates real PNG receipts (familymart/7-11/starbucks/mcdonalds); demo step CSV import + backup merge multi-device path; 4 sidecar fixtures ONNX-capable
 - **Mobile FFI transfer surface (axis #3):** `ocr_lines_*_json`, `import_json_json`, `backup_info|verify|merge_json`; capture options `max_edge`/`force_ocr`/`low_confidence_retry`; Dart Transfer screen + capability flags (`ocr_raw`, `csv_import`, `backup_merge`, …)

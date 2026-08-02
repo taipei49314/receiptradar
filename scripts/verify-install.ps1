@@ -26,6 +26,9 @@ if (-not (Test-Path $Fixtures)) {
 Write-Host "verify-install | bin=$Bin"
 & $Bin version --long
 if ($LASTEXITCODE -ne 0) { throw "version failed" }
+$vj = & $Bin version --json | ConvertFrom-Json
+if ([int]$vj.ledger_schema -lt 4) { throw "ledger_schema $($vj.ledger_schema) < 4 (need soft-delete build)" }
+Write-Host "schema v$($vj.ledger_schema) soft_delete=$($vj.soft_delete)"
 & $Bin engines
 if ($LASTEXITCODE -ne 0) { throw "engines failed" }
 & $Bin release-check --fixtures $Fixtures
