@@ -23,6 +23,8 @@ argon2 = { workspace = true }
 hkdf = { workspace = true }
 rand = { workspace = true }
 zeroize = { workspace = true }
+same-file = "1.0.6"
+atomic-write-file = "=0.2.2"
 # Decode + max-edge downscale for real OCR (JPEG/PNG/WebP/GIF). Text fixtures pass through.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 

@@ -57,7 +57,7 @@ Indexes: date+currency, merchant, invoice_id, content_hash, deleted_at.
 | Soft delete | `rradar delete <id> --yes` | Sets `deleted_at`; leaves trash |
 | List trash | `rradar trash` | Only soft-deleted rows |
 | Restore | `rradar restore <id>` | Clears `deleted_at` |
-| Hard purge | `rradar purge <id> --yes` / `purge --all --yes` | `DELETE` row permanently |
+| Hard purge | `rradar purge <id> --yes` / `purge --all --yes` | Commits `DELETE`, then cleans eligible orphan attachments |
 | Integrity | `rradar doctor` | `PRAGMA integrity_check` + active/trash counts |
 
 Default `list` / `stats` / `export` / dedupe **ignore** trash. No cloud tombstones — local lifecycle only.
@@ -116,6 +116,19 @@ Receipt images/files are **not** embedded in SQLite. They live next to the ledge
 - CLI: `rradar attach <id> <file>`, `rradar detach <id> [--delete-file]`, `process --confirm --attach`
 - FFI: `attach_file_json` / `detach_file_json` / `resolve_attachment_path_string`
 - Empty string on update **clears** tags or attachment_path.
+
+### Attachment cleanup on purge
+
+`Ledger::purge_transaction` and `Ledger::purge_trash` are database-first:
+
+1. Capture `(transaction_id, attachment_path)`, delete the target rows, and decode all existing attachment references in one SQLite transaction. Existing decoding corruption therefore rolls the delete back.
+2. Commit SQLite. For `.rrsealed`, atomically persist the updated encrypted ledger before touching attachments.
+3. Acquire an immediate cleanup transaction, refresh surviving references, and hold the SQLite writer reservation through cleanup. For processes sharing the same plaintext SQLite file (or the same decrypted temporary SQLite file), a concurrent writer is either included in the refreshed snapshot or waits until cleanup finishes. Separate `.rrsealed` opens use independent temporary databases and do not share this SQLite lock.
+4. Deduplicate candidates and perform best-effort filesystem cleanup. Cleanup-lock, refreshed-query, and filesystem failures cannot roll back the committed purge, so they are returned in `PurgeReport` together with the purged row count.
+
+Deletion is allowed only for exactly three normal path components, `attachments/<transaction-id>/<filename>`, where the path owner equals the purged row ID. Separator aliases are normalized, then canonical filesystem paths and file identities are compared against surviving references. Metadata, canonicalization, and identity failures fail closed and are recorded. Absolute, traversal, shallow, nested, wrong-owner, symlinked, or canonically escaping paths are skipped. Cleanup revalidates the canonical root, owner directory, and file immediately before deletion. It may remove only the now-empty `attachments/<transaction-id>` directory; it never removes `attachments/` or walks upward.
+
+Use `--json` on CLI purge commands for the serializable report. It includes `purged_transactions` plus considered, deleted, missing, shared-reference, duplicate-candidate, unsafe-path, directory-removal, and structured cleanup-error entries.
 
 ## Backup package vs ledger schema
 

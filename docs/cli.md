@@ -76,6 +76,8 @@ rradar report             # includes Budgets section when configured
 rradar edit <id> --amount 99 --notes "招待客戶"
 rradar undo --yes         # remove last confirmed
 rradar delete <id> --yes
+rradar purge <id> --yes --json
+rradar purge --all --yes --json
 rradar recategorize       # only category=other
 rradar config set default_currency TWD
 
@@ -93,6 +95,18 @@ rradar seal -p 'your-passphrase'          # → ledger.rrsealed
 ```
 
 Schema notes: [ledger-schema.md](./ledger-schema.md).
+
+## Trash, purge, and attachment cleanup
+
+`delete <id> --yes` is a reversible soft delete. Permanent entry points are:
+
+```bash
+rradar purge <id> --yes [--json]
+rradar purge --all --yes [--json]
+rradar delete <id> --yes --purge [--json]
+```
+
+All three call the same core `Ledger` purge APIs. SQLite commits first; `.rrsealed` is atomically re-persisted when applicable; eligible unreferenced files under `attachments/<transaction-id>/<filename>` are then deleted best-effort. Human output summarizes cleanup counts, including deduplicated candidates. `--json` emits the complete `PurgeReport`, including `purged_transactions` and structured attachment failures. A cleanup error means the database purge succeeded but the named cleanup stage did not. Pre-commit database/decode errors and sealed-persistence errors exit non-zero without filesystem cleanup. Post-commit cleanup-lock acquisition, reference-refresh, or release failures are included in the report so the purged row count is not lost.
 
 ## TW e-invoice QR
 
@@ -174,4 +188,3 @@ rradar serve                   # http://127.0.0.1:7432
 - [x] Real ONNX recognition path (`--features onnx` + models + ORT load-dynamic)  
 - [x] Image max-edge preprocess + low-confidence retry (1280 → 1600)  
 - [x] `ocr` raw line dump + `bench` A04 harness (p50/p95)  
-

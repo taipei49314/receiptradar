@@ -2,6 +2,7 @@
 
 use crate::crypto::{seal_bytes, unseal_bytes, ARGON2_M_KIB};
 use crate::ledger::{Ledger, LedgerError};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -35,7 +36,8 @@ pub fn open_ledger_auto(
         let plain = unseal_bytes(pass, &sealed, ARGON2_M_KIB)?;
         let tmp = std::env::temp_dir().join(format!("rradar-open-{}.db", ulid::Ulid::new()));
         std::fs::write(&tmp, &plain)?;
-        let ledger = Ledger::open(&tmp)?;
+        let mut ledger = Ledger::open(&tmp)?;
+        ledger.configure_sealed_purge(path.to_path_buf(), pass.to_owned());
         return Ok((ledger, Some(tmp)));
     }
 
@@ -55,7 +57,9 @@ pub fn save_sealed(
             std::fs::create_dir_all(parent)?;
         }
     }
-    std::fs::write(sealed_path, sealed)?;
+    let mut output = atomic_write_file::AtomicWriteFile::options().open(sealed_path)?;
+    output.write_all(&sealed)?;
+    output.commit()?;
     Ok(())
 }
 
@@ -72,40 +76,50 @@ pub fn seal_db_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::attachments::{resolve_attachment_path, store_attachment_bytes};
     use crate::money::{Iso4217, Money};
     use crate::types::{Field, FieldSource, ReceiptDraft, SourcePath};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test]
-    fn seal_and_reopen() {
-        let dir = std::env::temp_dir().join(format!(
-            "rradar-seal-{}",
+    fn case_dir(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "rradar-seal-{label}-{}-{}",
+            std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
-        ));
+        ))
+    }
+
+    fn sample_draft(id: &str) -> ReceiptDraft {
+        ReceiptDraft {
+            id: id.into(),
+            captured_at: "2024-01-01T00:00:00Z".into(),
+            merchant: Field::new("X".into(), 1.0, FieldSource::User),
+            total: Field::new(Money::new(99, Iso4217::TWD), 1.0, FieldSource::User),
+            transacted_at: Field::new("2024-01-01".into(), 1.0, FieldSource::User),
+            tax: None,
+            invoice_id: None,
+            category: Field::new("other".into(), 1.0, FieldSource::User),
+            raw_text: "".into(),
+            ocr_blocks: vec![],
+            overall_confidence: 1.0,
+            explain: crate::ExplainTrace::new("t", "ocr"),
+            source_path: SourcePath::Manual,
+        }
+    }
+
+    #[test]
+    fn seal_and_reopen() {
+        let dir = case_dir("reopen");
         std::fs::create_dir_all(&dir).unwrap();
         let db_path = dir.join("t.db");
         let sealed_path = dir.join("t.rrsealed");
 
         {
             let ledger = Ledger::open(&db_path).unwrap();
-            let draft = ReceiptDraft {
-                id: "s1".into(),
-                captured_at: "2024-01-01T00:00:00Z".into(),
-                merchant: Field::new("X".into(), 1.0, FieldSource::User),
-                total: Field::new(Money::new(99, Iso4217::TWD), 1.0, FieldSource::User),
-                transacted_at: Field::new("2024-01-01".into(), 1.0, FieldSource::User),
-                tax: None,
-                invoice_id: None,
-                category: Field::new("other".into(), 1.0, FieldSource::User),
-                raw_text: "".into(),
-                ocr_blocks: vec![],
-                overall_confidence: 1.0,
-                explain: crate::ExplainTrace::new("t", "ocr"),
-                source_path: SourcePath::Manual,
-            };
+            let draft = sample_draft("s1");
             ledger.confirm_draft(&draft, None, None, false).unwrap();
             save_sealed(&ledger, &sealed_path, "pw").unwrap();
         }
@@ -116,5 +130,94 @@ mod tests {
             let _ = std::fs::remove_file(t);
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn sealed_purge_persists_before_cleaning_the_logical_attachment_root() {
+        let dir = case_dir("purge");
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("source.db");
+        let sealed_path = dir.join("ledger.rrsealed");
+        let attachment_path = {
+            let ledger = Ledger::open(&db_path).unwrap();
+            ledger
+                .confirm_draft(&sample_draft("purge-me"), None, None, false)
+                .unwrap();
+            let stored =
+                store_attachment_bytes(&sealed_path, "purge-me", "receipt.jpg", b"receipt")
+                    .unwrap();
+            ledger
+                .connection()
+                .execute(
+                    "UPDATE transactions SET attachment_path = ?2 WHERE id = ?1",
+                    rusqlite::params!["purge-me", stored],
+                )
+                .unwrap();
+            save_sealed(&ledger, &sealed_path, "pw").unwrap();
+            resolve_attachment_path(&sealed_path, &stored)
+        };
+
+        let (ledger, tmp) = open_ledger_auto(&sealed_path, Some("pw")).unwrap();
+        let report = ledger.purge_transaction("purge-me").unwrap();
+        assert_eq!(report.purged_transactions, 1);
+        assert_eq!(report.attachments.deleted.len(), 1, "{report:?}");
+        assert!(!attachment_path.exists());
+        assert!(dir.join("attachments").is_dir());
+        drop(ledger);
+        if let Some(tmp) = tmp {
+            std::fs::remove_file(tmp).unwrap();
+        }
+
+        let (reopened, tmp) = open_ledger_auto(&sealed_path, Some("pw")).unwrap();
+        assert_eq!(reopened.count().unwrap(), 0);
+        drop(reopened);
+        if let Some(tmp) = tmp {
+            std::fs::remove_file(tmp).unwrap();
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn sealed_purge_persistence_failure_does_not_delete_attachment() {
+        let dir = case_dir("persist-failure");
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("source.db");
+        let sealed_path = dir.join("ledger.rrsealed");
+        let original_path = dir.join("original.rrsealed");
+        let attachment_path = {
+            let ledger = Ledger::open(&db_path).unwrap();
+            ledger
+                .confirm_draft(&sample_draft("keep-me"), None, None, false)
+                .unwrap();
+            let stored =
+                store_attachment_bytes(&sealed_path, "keep-me", "receipt.jpg", b"receipt").unwrap();
+            ledger
+                .connection()
+                .execute(
+                    "UPDATE transactions SET attachment_path = ?2 WHERE id = ?1",
+                    rusqlite::params!["keep-me", stored],
+                )
+                .unwrap();
+            save_sealed(&ledger, &sealed_path, "pw").unwrap();
+            resolve_attachment_path(&sealed_path, &stored)
+        };
+
+        let (ledger, tmp) = open_ledger_auto(&sealed_path, Some("pw")).unwrap();
+        std::fs::rename(&sealed_path, &original_path).unwrap();
+        std::fs::create_dir(&sealed_path).unwrap();
+        assert!(ledger.purge_transaction("keep-me").is_err());
+        assert!(attachment_path.is_file());
+        drop(ledger);
+        if let Some(tmp) = tmp {
+            std::fs::remove_file(tmp).unwrap();
+        }
+
+        let (reopened, tmp) = open_ledger_auto(&original_path, Some("pw")).unwrap();
+        assert_eq!(reopened.count().unwrap(), 1);
+        drop(reopened);
+        if let Some(tmp) = tmp {
+            std::fs::remove_file(tmp).unwrap();
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
