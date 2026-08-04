@@ -58,7 +58,8 @@ See [android-ffi.md](./android-ffi.md), [ffi.md](./ffi.md).
 | `get_transaction_json` / `last_transaction_json` | |
 | `update_transaction_json` | tags/attachment clear = empty string |
 | `delete_transaction` | soft-delete (v4 trash) |
-| `restore_transaction` / `purge_transaction` / `purge_trash_json` | trash lifecycle |
+| `restore_transaction` | restore from trash |
+| `purge_transaction` / `purge_trash_json` | JSON `PurgeReport`; inspect `purged_transactions`, duplicate/shared skips, and attachment cleanup errors |
 | `list_trash_json` / `integrity_json` | trash + PRAGMA integrity |
 | `attach_file_json` / `attach_bytes_json` / `detach_file_json` | |
 

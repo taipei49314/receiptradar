@@ -27,7 +27,8 @@ pub use aliases::{find_aliases_file, parse_aliases_toml, AliasBook};
 pub use attachments::{
     attachments_root_for_db, collect_attachment_files, ensure_attachments_root, normalize_tags,
     remove_stored_attachment, resolve_attachment_path, store_attachment, store_attachment_bytes,
-    write_attachment_files, AttachmentError,
+    write_attachment_files, AttachmentCleanupIssue, AttachmentCleanupOperation,
+    AttachmentCleanupReport, AttachmentError, AttachmentRecord,
 };
 pub use budget::{
     budget_markdown_section, budget_status_month, parse_budgets_toml, BudgetBook, BudgetLine,
@@ -45,7 +46,7 @@ pub use export::{
 pub use handoff::{apply_handoff_merge, create_handoff, inspect_handoff, write_handoff_file};
 pub use ledger::{
     apply_edits, CategoryStat, ConfirmResult, CurrencyMonthStat, DedupeLevel, DedupeWarning,
-    Ledger, LedgerError, LedgerIntegrity, Transaction, TxFilter, TxUpdate, UserEdits,
+    Ledger, LedgerError, LedgerIntegrity, PurgeReport, Transaction, TxFilter, TxUpdate, UserEdits,
     LEDGER_SCHEMA_VERSION,
 };
 pub use money::{sum_same_currency, Iso4217, Money, MoneyError};

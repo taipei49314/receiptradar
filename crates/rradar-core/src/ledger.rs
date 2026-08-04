@@ -3,10 +3,13 @@
 //! Schema evolves only via [`Ledger::migrate`] steps. Multi-device = encrypted
 //! backup / export only — **no** official cloud relay (project policy).
 
+use crate::attachments::{cleanup_purged_attachments, AttachmentCleanupReport, AttachmentRecord};
 use crate::money::{Iso4217, Money};
 use crate::types::{FieldSource, ReceiptDraft, SourcePath};
 use crate::VERSION;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{
+    params, Connection, OptionalExtension, Transaction as SqliteTransaction, TransactionBehavior,
+};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -124,6 +127,21 @@ pub struct LedgerIntegrity {
     pub path: String,
 }
 
+/// Database-first purge result, including best-effort attachment cleanup.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PurgeReport {
+    /// Rows permanently removed from SQLite.
+    pub purged_transactions: usize,
+    /// Filesystem follow-up performed only after the SQLite transaction commits.
+    pub attachments: AttachmentCleanupReport,
+}
+
+impl PurgeReport {
+    pub fn purged_any(&self) -> bool {
+        self.purged_transactions > 0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DedupeLevel {
@@ -194,6 +212,50 @@ pub struct TxFilter {
 pub struct Ledger {
     conn: Connection,
     path: PathBuf,
+    attachment_db_path: PathBuf,
+    sealed_purge: Option<SealedPurgeTarget>,
+}
+
+struct SealedPurgeTarget {
+    path: PathBuf,
+    passphrase: String,
+}
+
+fn query_attachment_records<P: rusqlite::Params>(
+    conn: &Connection,
+    sql: &str,
+    params: P,
+) -> rusqlite::Result<Vec<AttachmentRecord>> {
+    let mut statement = conn.prepare(sql)?;
+    let rows = statement.query_map(params, |row| {
+        Ok(AttachmentRecord {
+            transaction_id: row.get(0)?,
+            path: row.get(1)?,
+        })
+    })?;
+    rows.collect()
+}
+
+fn post_commit_cleanup_failure(
+    candidates: Vec<AttachmentRecord>,
+    operation: crate::AttachmentCleanupOperation,
+    message: String,
+) -> AttachmentCleanupReport {
+    let considered = candidates.clone();
+    let cleanup_errors = candidates
+        .into_iter()
+        .map(|record| crate::AttachmentCleanupIssue {
+            transaction_id: record.transaction_id,
+            path: record.path,
+            operation,
+            message: message.clone(),
+        })
+        .collect();
+    AttachmentCleanupReport {
+        considered,
+        cleanup_errors,
+        ..AttachmentCleanupReport::default()
+    }
 }
 
 impl Ledger {
@@ -205,7 +267,12 @@ impl Ledger {
             }
         }
         let conn = Connection::open(&path)?;
-        let mut ledger = Self { conn, path };
+        let mut ledger = Self {
+            conn,
+            attachment_db_path: path.clone(),
+            path,
+            sealed_purge: None,
+        };
         ledger.migrate()?;
         Ok(ledger)
     }
@@ -215,6 +282,8 @@ impl Ledger {
         let mut ledger = Self {
             conn,
             path: PathBuf::from(":memory:"),
+            attachment_db_path: PathBuf::from(":memory:"),
+            sealed_purge: None,
         };
         ledger.migrate()?;
         Ok(ledger)
@@ -226,6 +295,87 @@ impl Ledger {
 
     pub fn connection(&self) -> &Connection {
         &self.conn
+    }
+
+    /// Configure purge persistence for a ledger decrypted from `.rrsealed`.
+    /// The SQLite temp path remains [`Ledger::path`], while attachment cleanup
+    /// is rooted beside the durable sealed path.
+    pub(crate) fn configure_sealed_purge(&mut self, path: PathBuf, passphrase: String) {
+        self.attachment_db_path = path.clone();
+        self.sealed_purge = Some(SealedPurgeTarget { path, passphrase });
+    }
+
+    fn persist_committed_purge(&self, purged_transactions: usize) -> Result<(), LedgerError> {
+        if purged_transactions == 0 {
+            return Ok(());
+        }
+        if let Some(target) = &self.sealed_purge {
+            crate::sealed::save_sealed(self, &target.path, &target.passphrase)
+                .map_err(|error| LedgerError::Msg(format!("persist sealed purge: {error}")))?;
+        }
+        Ok(())
+    }
+
+    fn cleanup_after_committed_purge(
+        &self,
+        candidates: Vec<AttachmentRecord>,
+    ) -> AttachmentCleanupReport {
+        self.cleanup_after_committed_purge_with_hook(candidates, || {})
+    }
+
+    fn cleanup_after_committed_purge_with_hook(
+        &self,
+        candidates: Vec<AttachmentRecord>,
+        after_reference_snapshot: impl FnOnce(),
+    ) -> AttachmentCleanupReport {
+        if candidates.is_empty() {
+            return AttachmentCleanupReport::default();
+        }
+
+        // Refresh surviving references after the delete commit while holding
+        // SQLite's writer reservation. A concurrent writer either commits
+        // before this transaction (and is observed) or waits until filesystem
+        // cleanup is complete.
+        let cleanup_guard =
+            match SqliteTransaction::new_unchecked(&self.conn, TransactionBehavior::Immediate) {
+                Ok(guard) => guard,
+                Err(error) => {
+                    return post_commit_cleanup_failure(
+                        candidates,
+                        crate::AttachmentCleanupOperation::AcquireCleanupLock,
+                        error.to_string(),
+                    );
+                }
+            };
+        let remaining_references = match query_attachment_records(
+            &cleanup_guard,
+            "SELECT id, attachment_path FROM transactions WHERE attachment_path IS NOT NULL",
+            [],
+        ) {
+            Ok(references) => references,
+            Err(error) => {
+                return post_commit_cleanup_failure(
+                    candidates,
+                    crate::AttachmentCleanupOperation::RefreshReferences,
+                    error.to_string(),
+                );
+            }
+        };
+        after_reference_snapshot();
+        let report =
+            cleanup_purged_attachments(&self.attachment_db_path, candidates, remaining_references);
+        let mut report = report;
+        if let Err(error) = cleanup_guard.commit() {
+            for record in report.considered.clone() {
+                report.cleanup_errors.push(crate::AttachmentCleanupIssue {
+                    transaction_id: record.transaction_id,
+                    path: record.path,
+                    operation: crate::AttachmentCleanupOperation::ReleaseCleanupLock,
+                    message: error.to_string(),
+                });
+            }
+        }
+        report
     }
 
     /// Apply base DDL + forward migrations up to [`LEDGER_SCHEMA_VERSION`].
@@ -637,20 +787,66 @@ impl Ledger {
         Ok(n > 0)
     }
 
-    /// Hard-delete one row (purge from trash or force). Prefer soft-delete for UX.
-    pub fn purge_transaction(&self, id: &str) -> Result<bool, LedgerError> {
-        let n = self
-            .conn
-            .execute("DELETE FROM transactions WHERE id = ?1", params![id])?;
-        Ok(n > 0)
+    /// Hard-delete one row, then clean its unreferenced attachment best-effort.
+    ///
+    /// Candidate and remaining-reference decoding happen inside the same SQLite
+    /// transaction as the delete. Filesystem cleanup starts only after commit.
+    pub fn purge_transaction(&self, id: &str) -> Result<PurgeReport, LedgerError> {
+        let transaction = self.conn.unchecked_transaction()?;
+        let candidates = query_attachment_records(
+            &transaction,
+            "SELECT id, attachment_path FROM transactions \
+             WHERE id = ?1 AND attachment_path IS NOT NULL",
+            params![id],
+        )?;
+        let purged_transactions =
+            transaction.execute("DELETE FROM transactions WHERE id = ?1", params![id])?;
+        if !candidates.is_empty() {
+            // Validate all current rows before commit so existing decoding
+            // corruption rolls the purge back rather than becoming a
+            // post-commit cleanup surprise.
+            drop(query_attachment_records(
+                &transaction,
+                "SELECT id, attachment_path FROM transactions WHERE attachment_path IS NOT NULL",
+                [],
+            )?);
+        }
+        transaction.commit()?;
+        self.persist_committed_purge(purged_transactions)?;
+        let attachments = self.cleanup_after_committed_purge(candidates);
+
+        Ok(PurgeReport {
+            purged_transactions,
+            attachments,
+        })
     }
 
-    /// Hard-delete all soft-deleted rows. Returns count removed.
-    pub fn purge_trash(&self) -> Result<usize, LedgerError> {
-        let n = self
-            .conn
-            .execute("DELETE FROM transactions WHERE deleted_at IS NOT NULL", [])?;
-        Ok(n)
+    /// Hard-delete all soft-deleted rows, then clean orphaned attachments.
+    pub fn purge_trash(&self) -> Result<PurgeReport, LedgerError> {
+        let transaction = self.conn.unchecked_transaction()?;
+        let candidates = query_attachment_records(
+            &transaction,
+            "SELECT id, attachment_path FROM transactions \
+             WHERE deleted_at IS NOT NULL AND attachment_path IS NOT NULL",
+            [],
+        )?;
+        let purged_transactions =
+            transaction.execute("DELETE FROM transactions WHERE deleted_at IS NOT NULL", [])?;
+        if !candidates.is_empty() {
+            drop(query_attachment_records(
+                &transaction,
+                "SELECT id, attachment_path FROM transactions WHERE attachment_path IS NOT NULL",
+                [],
+            )?);
+        }
+        transaction.commit()?;
+        self.persist_committed_purge(purged_transactions)?;
+        let attachments = self.cleanup_after_committed_purge(candidates);
+
+        Ok(PurgeReport {
+            purged_transactions,
+            attachments,
+        })
     }
 
     /// Soft-delete alias for API stability (`delete` CLI → trash).
@@ -1188,8 +1384,16 @@ impl Ledger {
             let _ = std::fs::remove_file(&tmp);
             return Ok(bytes);
         }
-        // Checkpoint WAL so main file is complete
-        let _ = self.conn.execute_batch("PRAGMA wal_checkpoint(FULL);");
+        // Checkpoint WAL so the main file is complete. A busy checkpoint must
+        // not be treated as a successful sealed snapshot.
+        let busy: i64 = self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(FULL)", [], |row| row.get(0))?;
+        if busy != 0 {
+            return Err(LedgerError::Msg(
+                "WAL checkpoint remained busy; refusing incomplete database snapshot".into(),
+            ));
+        }
         Ok(std::fs::read(&self.path)?)
     }
 }
@@ -1209,9 +1413,9 @@ fn row_to_tx(r: &rusqlite::Row<'_>) -> rusqlite::Result<Transaction> {
         overall_confidence: r.get::<_, f64>(10)? as f32,
         content_hash: r.get(11)?,
         notes: r.get(12)?,
-        tags: r.get(13).ok().flatten(),
-        attachment_path: r.get(14).ok().flatten(),
-        deleted_at: r.get(15).ok().flatten(),
+        tags: r.get(13)?,
+        attachment_path: r.get(14)?,
+        deleted_at: r.get(15)?,
     })
 }
 
@@ -1262,6 +1466,9 @@ pub fn apply_edits(draft: &mut ReceiptDraft, edits: &UserEdits) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::attachments::{
+        attachments_root_for_db, resolve_attachment_path, store_attachment_bytes,
+    };
     use crate::money::{Iso4217, Money};
     use crate::types::{Field, FieldSource, SourcePath};
 
@@ -1281,6 +1488,34 @@ mod tests {
             explain: crate::ExplainTrace::new("mock", "ocr"),
             source_path: SourcePath::Ocr,
         }
+    }
+
+    fn disk_ledger(label: &str) -> (PathBuf, Ledger) {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "rradar-ledger-{label}-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ledger = Ledger::open(dir.join("ledger.db")).unwrap();
+        (dir, ledger)
+    }
+
+    fn attach(ledger: &Ledger, id: &str, filename: &str) -> String {
+        let stored = store_attachment_bytes(ledger.path(), id, filename, b"receipt").unwrap();
+        ledger
+            .update_transaction(
+                id,
+                &TxUpdate {
+                    attachment_path: Some(stored.clone()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        stored
     }
 
     #[test]
@@ -1370,7 +1605,10 @@ mod tests {
         assert!(db.restore_transaction("txdel").unwrap());
         assert_eq!(db.count().unwrap(), 1);
         assert!(db.soft_delete_transaction("txdel").unwrap());
-        assert!(db.purge_transaction("txdel").unwrap());
+        assert_eq!(
+            db.purge_transaction("txdel").unwrap().purged_transactions,
+            1
+        );
         assert_eq!(db.count_trash().unwrap(), 0);
     }
 
@@ -1399,7 +1637,7 @@ mod tests {
         assert!(integ.pragma_ok);
         assert_eq!(integ.active_count, 1);
         assert_eq!(integ.trash_count, 1);
-        assert_eq!(db.purge_trash().unwrap(), 1);
+        assert_eq!(db.purge_trash().unwrap().purged_transactions, 1);
     }
 
     #[test]
@@ -1535,5 +1773,366 @@ mod tests {
             _ => panic!("expected high version"),
         };
         assert!(err.to_string().contains("newer"));
+    }
+
+    #[test]
+    fn purge_report_commits_database_then_cleans_attachment() {
+        let (dir, ledger) = disk_ledger("single-purge");
+        ledger
+            .confirm_draft(&sample_draft("tx01", None, 100), None, None, false)
+            .unwrap();
+        let stored = attach(&ledger, "tx01", "receipt.jpg");
+        let absolute = resolve_attachment_path(ledger.path(), &stored);
+
+        let report = ledger.purge_transaction("tx01").unwrap();
+        assert_eq!(report.purged_transactions, 1);
+        assert_eq!(report.attachments.considered.len(), 1);
+        assert_eq!(report.attachments.deleted.len(), 1);
+        assert_eq!(report.attachments.empty_dirs_removed.len(), 1);
+        assert!(!absolute.exists());
+        assert!(attachments_root_for_db(ledger.path()).is_dir());
+
+        let json = serde_json::to_string(&report).unwrap();
+        let decoded: PurgeReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, report);
+        assert_eq!(decoded.purged_transactions, 1);
+
+        let missing = ledger.purge_transaction("missing").unwrap();
+        assert_eq!(missing.purged_transactions, 0);
+        assert!(missing.attachments.considered.is_empty());
+        drop(ledger);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn post_commit_cleanup_guard_blocks_concurrent_reference_writes() {
+        use rusqlite::ErrorCode;
+        use std::sync::{Arc, Barrier};
+        use std::time::Duration;
+
+        let (dir, ledger) = disk_ledger("cleanup-lock");
+        for id in ["owner", "survivor"] {
+            ledger
+                .confirm_draft(&sample_draft(id, None, 100), None, None, true)
+                .unwrap();
+        }
+        let stored = attach(&ledger, "owner", "receipt.jpg");
+        let absolute = resolve_attachment_path(ledger.path(), &stored);
+        ledger
+            .connection()
+            .execute("DELETE FROM transactions WHERE id='owner'", [])
+            .unwrap();
+
+        let barrier = Arc::new(Barrier::new(2));
+        let writer_barrier = Arc::clone(&barrier);
+        let writer_db = ledger.path().to_path_buf();
+        let writer_path = stored.clone();
+        let writer = std::thread::spawn(move || {
+            let connection = Connection::open(writer_db).unwrap();
+            connection.busy_timeout(Duration::ZERO).unwrap();
+            writer_barrier.wait();
+            connection.execute(
+                "UPDATE transactions SET attachment_path = ?2 WHERE id = ?1",
+                params!["survivor", writer_path],
+            )
+        });
+
+        let report = ledger.cleanup_after_committed_purge_with_hook(
+            vec![AttachmentRecord {
+                transaction_id: "owner".into(),
+                path: stored,
+            }],
+            || {
+                barrier.wait();
+                let error = writer.join().unwrap().unwrap_err();
+                match error {
+                    rusqlite::Error::SqliteFailure(error, _) => assert!(matches!(
+                        error.code,
+                        ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked
+                    )),
+                    other => panic!("unexpected concurrent writer error: {other}"),
+                }
+            },
+        );
+        assert_eq!(report.deleted.len(), 1, "{report:?}");
+        assert!(!absolute.exists());
+        let survivor_path: Option<String> = ledger
+            .connection()
+            .query_row(
+                "SELECT attachment_path FROM transactions WHERE id='survivor'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(survivor_path.is_none());
+        drop(ledger);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn post_commit_lock_and_refresh_failures_return_structured_reports() {
+        let (lock_dir, lock_ledger) = disk_ledger("cleanup-lock-failure");
+        lock_ledger
+            .confirm_draft(&sample_draft("owner", None, 100), None, None, false)
+            .unwrap();
+        let lock_stored = attach(&lock_ledger, "owner", "receipt.jpg");
+        let lock_file = resolve_attachment_path(lock_ledger.path(), &lock_stored);
+        let outer_transaction = lock_ledger.connection().unchecked_transaction().unwrap();
+        let lock_report = lock_ledger.cleanup_after_committed_purge(vec![AttachmentRecord {
+            transaction_id: "owner".into(),
+            path: lock_stored,
+        }]);
+        assert!(lock_report.cleanup_errors.iter().any(|issue| {
+            issue.operation == crate::AttachmentCleanupOperation::AcquireCleanupLock
+        }));
+        assert_eq!(lock_report.considered.len(), 1);
+        assert!(lock_file.is_file());
+        drop(outer_transaction);
+        drop(lock_ledger);
+        std::fs::remove_dir_all(lock_dir).unwrap();
+
+        let (refresh_dir, refresh_ledger) = disk_ledger("cleanup-refresh-failure");
+        for id in ["owner", "corrupt-reference"] {
+            refresh_ledger
+                .confirm_draft(&sample_draft(id, None, 100), None, None, true)
+                .unwrap();
+        }
+        let refresh_stored = attach(&refresh_ledger, "owner", "receipt.jpg");
+        let refresh_file = resolve_attachment_path(refresh_ledger.path(), &refresh_stored);
+        refresh_ledger
+            .connection()
+            .execute(
+                "UPDATE transactions SET attachment_path = X'80' WHERE id='corrupt-reference'",
+                [],
+            )
+            .unwrap();
+        let refresh_report = refresh_ledger.cleanup_after_committed_purge(vec![AttachmentRecord {
+            transaction_id: "owner".into(),
+            path: refresh_stored,
+        }]);
+        assert!(refresh_report.cleanup_errors.iter().any(|issue| {
+            issue.operation == crate::AttachmentCleanupOperation::RefreshReferences
+        }));
+        assert_eq!(refresh_report.considered.len(), 1);
+        assert!(refresh_file.is_file());
+        drop(refresh_ledger);
+        std::fs::remove_dir_all(refresh_dir).unwrap();
+    }
+
+    #[test]
+    fn purge_trash_counts_rows_and_only_cleans_trashed_attachments() {
+        let (dir, ledger) = disk_ledger("trash-purge");
+        for (id, amount) in [("trash-a", 100), ("trash-b", 200), ("active", 300)] {
+            ledger
+                .confirm_draft(&sample_draft(id, None, amount), None, None, true)
+                .unwrap();
+        }
+        let trashed_path = attach(&ledger, "trash-a", "a.jpg");
+        let active_path = attach(&ledger, "active", "active.jpg");
+        ledger.soft_delete_transaction("trash-a").unwrap();
+        ledger.soft_delete_transaction("trash-b").unwrap();
+
+        let report = ledger.purge_trash().unwrap();
+        assert_eq!(report.purged_transactions, 2);
+        assert_eq!(report.attachments.deleted.len(), 1);
+        assert!(!resolve_attachment_path(ledger.path(), &trashed_path).exists());
+        assert!(resolve_attachment_path(ledger.path(), &active_path).is_file());
+        assert_eq!(ledger.count().unwrap(), 1);
+        assert_eq!(ledger.count_trash().unwrap(), 0);
+        drop(ledger);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn purge_preserves_normalized_shared_reference() {
+        let (dir, ledger) = disk_ledger("shared-reference");
+        for id in ["owner", "active-ref", "trash-ref"] {
+            ledger
+                .confirm_draft(&sample_draft(id, None, 100), None, None, true)
+                .unwrap();
+        }
+        let stored = attach(&ledger, "owner", "receipt.jpg");
+        let alias = stored.replace('/', "\\");
+        for id in ["active-ref", "trash-ref"] {
+            ledger
+                .update_transaction(
+                    id,
+                    &TxUpdate {
+                        attachment_path: Some(alias.clone()),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+        ledger.soft_delete_transaction("trash-ref").unwrap();
+
+        let report = ledger.purge_transaction("owner").unwrap();
+        assert_eq!(report.purged_transactions, 1);
+        assert_eq!(report.attachments.shared_references_skipped.len(), 1);
+        assert!(resolve_attachment_path(ledger.path(), &stored).is_file());
+        drop(ledger);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn purge_rejects_wrong_owner_and_reports_post_commit_filesystem_failure() {
+        let (dir, ledger) = disk_ledger("unsafe-and-failure");
+        for id in ["row-a", "row-b", "directory-file"] {
+            ledger
+                .confirm_draft(&sample_draft(id, None, 100), None, None, true)
+                .unwrap();
+        }
+        let owner_b = attach(&ledger, "row-b", "receipt.jpg");
+        ledger
+            .update_transaction(
+                "row-a",
+                &TxUpdate {
+                    attachment_path: Some(owner_b.clone()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let unsafe_report = ledger.purge_transaction("row-a").unwrap();
+        assert_eq!(unsafe_report.purged_transactions, 1);
+        assert_eq!(unsafe_report.attachments.unsafe_paths_skipped.len(), 1);
+        assert!(resolve_attachment_path(ledger.path(), &owner_b).is_file());
+
+        let bad_path = "attachments/directory-file/not-a-file";
+        std::fs::create_dir_all(resolve_attachment_path(ledger.path(), bad_path)).unwrap();
+        ledger
+            .update_transaction(
+                "directory-file",
+                &TxUpdate {
+                    attachment_path: Some(bad_path.into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let failure_report = ledger.purge_transaction("directory-file").unwrap();
+        assert_eq!(failure_report.purged_transactions, 1);
+        assert!(failure_report
+            .attachments
+            .cleanup_errors
+            .iter()
+            .any(|issue| { issue.operation == crate::AttachmentCleanupOperation::Metadata }));
+        let exists: i64 = ledger
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM transactions WHERE id='directory-file'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(exists, 0);
+        drop(ledger);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn failed_database_delete_leaves_attachment_untouched() {
+        let (dir, ledger) = disk_ledger("delete-rollback");
+        ledger
+            .confirm_draft(&sample_draft("tx01", None, 100), None, None, false)
+            .unwrap();
+        let stored = attach(&ledger, "tx01", "receipt.jpg");
+        ledger
+            .connection()
+            .execute_batch(
+                "CREATE TRIGGER block_purge BEFORE DELETE ON transactions \
+                 BEGIN SELECT RAISE(ABORT, 'blocked'); END;",
+            )
+            .unwrap();
+
+        assert!(ledger.purge_transaction("tx01").is_err());
+        assert!(resolve_attachment_path(ledger.path(), &stored).is_file());
+        let exists: i64 = ledger
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM transactions WHERE id='tx01'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(exists, 1);
+        drop(ledger);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn purge_propagates_candidate_and_remaining_reference_decode_errors() {
+        let (dir, ledger) = disk_ledger("decode-errors");
+        for id in ["bad-candidate", "normal", "bad-reference"] {
+            ledger
+                .confirm_draft(&sample_draft(id, None, 100), None, None, true)
+                .unwrap();
+        }
+        ledger
+            .connection()
+            .execute(
+                "UPDATE transactions SET attachment_path = X'80' WHERE id='bad-candidate'",
+                [],
+            )
+            .unwrap();
+        assert!(ledger.purge_transaction("bad-candidate").is_err());
+        let candidate_exists: i64 = ledger
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM transactions WHERE id='bad-candidate'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(candidate_exists, 1);
+
+        let stored = attach(&ledger, "normal", "receipt.jpg");
+        ledger
+            .connection()
+            .execute(
+                "UPDATE transactions SET attachment_path = X'80' WHERE id='bad-reference'",
+                [],
+            )
+            .unwrap();
+        assert!(ledger.purge_transaction("normal").is_err());
+        assert!(resolve_attachment_path(ledger.path(), &stored).is_file());
+        let normal_exists: i64 = ledger
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM transactions WHERE id='normal'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(normal_exists, 1);
+        drop(ledger);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn purge_trash_propagates_candidate_decode_errors() {
+        let (dir, ledger) = disk_ledger("trash-decode-error");
+        ledger
+            .confirm_draft(&sample_draft("bad-trash", None, 100), None, None, false)
+            .unwrap();
+        ledger.soft_delete_transaction("bad-trash").unwrap();
+        ledger
+            .connection()
+            .execute(
+                "UPDATE transactions SET attachment_path = X'80' WHERE id='bad-trash'",
+                [],
+            )
+            .unwrap();
+
+        assert!(ledger.purge_trash().is_err());
+        let exists: i64 = ledger
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM transactions WHERE id='bad-trash'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(exists, 1);
+        drop(ledger);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

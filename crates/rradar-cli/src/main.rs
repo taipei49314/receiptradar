@@ -12,8 +12,8 @@ use rradar_core::{
     store_attachment, transactions_from_backup, transactions_from_csv, transactions_to_csv,
     transactions_to_json, verify_backup, write_handoff_file, write_restored_aliases,
     write_restored_attachments, write_restored_budgets, write_restored_db, AliasBook, AppConfig,
-    BudgetBook, Iso4217, Money, ProcessOptions, ReceiptDraft, Transaction, TxFilter, TxUpdate,
-    UserEdits, LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
+    BudgetBook, Iso4217, Money, ProcessOptions, PurgeReport, ReceiptDraft, Transaction, TxFilter,
+    TxUpdate, UserEdits, LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
 };
 use rradar_ocr::engine_by_name;
 use std::env;
@@ -380,7 +380,10 @@ fn cmd_release_check(args: &[String]) -> Result<(), String> {
                     let trash1 = ledger.count_trash().unwrap_or(0) == 1;
                     let restored = ledger.restore_transaction(&id).unwrap_or(false);
                     let active1 = ledger.count().unwrap_or(0) == 1;
-                    let purged = ledger.purge_transaction(&id).unwrap_or(false);
+                    let purged = ledger
+                        .purge_transaction(&id)
+                        .map(|report| report.purged_any())
+                        .unwrap_or(false);
                     let integ = ledger.integrity_check().ok();
                     let integ_ok = integ.as_ref().map(|i| i.pragma_ok).unwrap_or(false);
                     let ok = soft && active0 && trash1 && restored && active1 && purged && integ_ok;
@@ -2831,17 +2834,24 @@ fn cmd_delete(args: &[String]) -> Result<(), String> {
         .clone();
     let yes = args.iter().any(|a| a == "--yes" || a == "-y");
     let hard = args.iter().any(|a| a == "--purge" || a == "--hard");
+    let json = args.iter().any(|a| a == "--json");
     if !yes {
         return Err("refusing to delete without --yes".into());
     }
     let flags = extract_db_from_all(args)?;
     let (ledger, tmp) = open_db(&flags)?;
     if hard {
-        let ok = ledger.purge_transaction(&id).map_err(|e| e.to_string())?;
-        if !ok {
+        let purge_result = ledger.purge_transaction(&id).map_err(|e| e.to_string());
+        drop(ledger);
+        if let Some(path) = tmp {
+            let _ = std::fs::remove_file(path);
+        }
+        let report = purge_result?;
+        if !report.purged_any() {
             return Err(format!("not found: {id}"));
         }
-        println!("purged\t{id}");
+        print_purge_report(&report, json, &format!("purged\t{id}"))?;
+        return Ok(());
     } else {
         let ok = ledger
             .soft_delete_transaction(&id)
@@ -2921,24 +2931,63 @@ fn cmd_purge(args: &[String]) -> Result<(), String> {
         return Err("refusing to purge without --yes (hard delete)".into());
     }
     let all = args.iter().any(|a| a == "--all" || a == "--trash");
+    let json = args.iter().any(|a| a == "--json");
+    let id = if all {
+        None
+    } else {
+        Some(
+            args.iter()
+                .find(|a| !a.starts_with('-') && *a != "purge")
+                .ok_or("usage: rradar purge <id> --yes | rradar purge --all --yes")?
+                .clone(),
+        )
+    };
     let flags = extract_db_from_all(args)?;
     let (ledger, tmp) = open_db(&flags)?;
-    if all {
-        let n = ledger.purge_trash().map_err(|e| e.to_string())?;
-        println!("purged trash | {n}");
+    let purge_result = if all {
+        ledger
+            .purge_trash()
+            .map_err(|e| e.to_string())
+            .map(|report| (report, "purged trash".to_owned(), false))
     } else {
-        let id = args
-            .iter()
-            .find(|a| !a.starts_with('-') && *a != "purge")
-            .ok_or("usage: rradar purge <id> --yes | rradar purge --all --yes")?
-            .clone();
-        let ok = ledger.purge_transaction(&id).map_err(|e| e.to_string())?;
-        if !ok {
-            return Err(format!("not found: {id}"));
-        }
-        println!("purged\t{id}");
+        let id = id.as_deref().expect("purge id was parsed above");
+        ledger
+            .purge_transaction(id)
+            .map_err(|e| e.to_string())
+            .map(|report| (report, format!("purged\t{id}"), true))
+    };
+    drop(ledger);
+    if let Some(path) = tmp {
+        let _ = std::fs::remove_file(path);
     }
-    maybe_reseal(&flags, &ledger, tmp)?;
+    let (report, label, require_match) = purge_result?;
+    if require_match && !report.purged_any() {
+        let id = id.as_deref().expect("purge id was parsed above");
+        return Err(format!("not found: {id}"));
+    }
+    print_purge_report(&report, json, &label)?;
+    Ok(())
+}
+
+fn print_purge_report(report: &PurgeReport, json: bool, label: &str) -> Result<(), String> {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(report).map_err(|error| error.to_string())?
+        );
+    } else {
+        println!(
+            "{label} | {} transaction(s) | attachments deleted={} missing={} shared={} duplicates={} unsafe={} errors={} dirs_removed={}",
+            report.purged_transactions,
+            report.attachments.deleted.len(),
+            report.attachments.already_missing.len(),
+            report.attachments.shared_references_skipped.len(),
+            report.attachments.duplicate_candidates_skipped.len(),
+            report.attachments.unsafe_paths_skipped.len(),
+            report.attachments.cleanup_errors.len(),
+            report.attachments.empty_dirs_removed.len(),
+        );
+    }
     Ok(())
 }
 
@@ -4484,10 +4533,11 @@ demo     one-command closed-loop from fixtures/ (recordable)
 show <id>
 edit <id> [--merchant --amount --currency --category --notes --date] [--tags T] [--clear-tags]
 delete <id> --yes           soft-delete (schema v4 trash)
-delete <id> --yes --purge   hard-delete one row
+  delete <id> --yes --purge [--json]   hard-delete one row + orphan attachment cleanup
 trash [--json] [--limit N]  list soft-deleted
 restore <id>                undelete
-purge <id> --yes | purge --all --yes
+  purge <id> --yes [--json] | purge --all --yes [--json]
+    Database rows commit first; the report lists every attachment cleanup outcome.
   edit/delete require --db for non-default ledgers.",
         other => {
             return Err(format!(
@@ -4541,7 +4591,7 @@ Commands:
   delete <id> --yes    Soft-delete → trash (alias: rm; --purge hard)
   trash                List soft-deleted rows
   restore <id>         Undelete from trash
-  purge <id>|--all --yes Hard-delete trash
+  purge <id>|--all --yes Hard-delete + safe attachment GC [--json report]
   stats                Per-currency totals; --by-category for breakdown
   top                  Top merchants by spend (one currency)
   report               Markdown monthly or annual report (-o file.md)

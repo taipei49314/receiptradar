@@ -22,6 +22,8 @@ Core runtime (bundled / linked in default release CLI)
 | thiserror, anyhow      | MIT OR Apache-2.0 | errors                                     |
 | ulid                   | MIT               | ids                                        |
 | rand, zeroize          | MIT OR Apache-2.0 | crypto hygiene                             |
+| same-file             | Unlicense OR MIT  | cross-platform filesystem identity         |
+| atomic-write-file     | BSD-3-Clause      | atomic `.rrsealed` replacement             |
 
 Optional (NOT in default release binary)
 ----------------------------------------
