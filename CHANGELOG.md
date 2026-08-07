@@ -3,6 +3,7 @@
 ## 0.1.0-alpha (unreleased)
 
 ### Fixed
+- **Release Windows smoke `/tmp` path:** `scripts/smoke-release-binary.sh` pipes `version --json` to Python on stdin (no Git-Bash `/tmp` file). Root cause of failed tags `v0.1.0-cli.32` / `v0.1.0-cli.33`. Python picker prefers a real interpreter (`import json`) over Windows Store `python3` stubs (exit 49). CI soft-delete + release-binary steps avoid `/tmp`; workflow guard rejects regressions.
 - Network audit allowlist for loopback/`rradar serve` (restore CI green after local HTTP API)
 - Windows CI: mock OCR fixtures tolerate CRLF magic terminators; `.gitattributes` marks `fixtures/mock_ocr/**` binary
 

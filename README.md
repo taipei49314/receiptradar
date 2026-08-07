@@ -7,8 +7,9 @@ Offline receipt → ledger. Local-first. No account.
 
 **Repo:** https://github.com/taipei49314/receiptradar
 
-> **CLI product is complete** for daily local bookkeeping (mock OCR + text/QR fixtures).  
-> Real ONNX OCR is available behind `--features onnx` (see `models/README.md`).
+> **Completed scope (this release candidate):** CLI local-first bookkeeping — process → ledger → trash/restore/purge (with attachment cleanup) → export/backup → local HTTP API. Mock OCR + text/QR fixtures are the default path; real ONNX OCR is optional (`--features onnx`, see `models/README.md`).
+>
+> **Out of current completed scope:** the Flutter mobile shell under `apps/mobile` is an **experimental/mock** UI (`MockRradarApi` until FRB generate). It is not part of the CLI product release candidate.
 
 [中文](./README.zh-TW.md) · [CLI guide](./docs/cli.md) · [Design](./docs/design-full.md)
 
@@ -92,10 +93,10 @@ Recordable narrative: [docs/demo-showcase.md](./docs/demo-showcase.md).
 
 Details: [models/README.md](./models/README.md) · spike [docs/spike-ocr-size.md](./docs/spike-ocr-size.md).
 
-## Mobile / FFI
+## Mobile / FFI (experimental)
 
-Rust mobile contract: [docs/ffi.md](./docs/ffi.md) · crate `rradar-ffi` (`staticlib`/`cdylib`).  
-Flutter shell: [apps/mobile](./apps/mobile) (mock `RradarApi` until FRB generate).
+Rust FFI contract is tested: [docs/ffi.md](./docs/ffi.md) · crate `rradar-ffi` (`staticlib`/`cdylib`).  
+Flutter shell: [apps/mobile](./apps/mobile) — **experimental/mock** (`MockRradarApi`; FRB generate pending). **Not** in the completed CLI bookkeeping scope.
 
 ```bash
 cargo test -p rradar-ffi

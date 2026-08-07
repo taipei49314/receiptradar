@@ -1805,6 +1805,89 @@ mod tests {
     }
 
     #[test]
+    fn soft_delete_then_purge_cleans_attachment_and_second_purge_is_noop() {
+        let (dir, ledger) = disk_ledger("soft-then-purge-twice");
+        ledger
+            .confirm_draft(&sample_draft("tx-soft", None, 100), None, None, false)
+            .unwrap();
+        let stored = attach(&ledger, "tx-soft", "receipt.jpg");
+        let absolute = resolve_attachment_path(ledger.path(), &stored);
+        assert!(ledger.soft_delete_transaction("tx-soft").unwrap());
+        assert!(absolute.is_file(), "soft-delete must keep attachment blob");
+
+        let first = ledger.purge_transaction("tx-soft").unwrap();
+        assert_eq!(first.purged_transactions, 1);
+        assert_eq!(first.attachments.deleted.len(), 1);
+        assert!(!absolute.exists());
+
+        let second = ledger.purge_transaction("tx-soft").unwrap();
+        assert_eq!(second.purged_transactions, 0);
+        assert!(second.attachments.considered.is_empty());
+        assert!(second.attachments.deleted.is_empty());
+        drop(ledger);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn purge_with_missing_attachment_file_still_deletes_row() {
+        let (dir, ledger) = disk_ledger("db-row-missing-file");
+        ledger
+            .confirm_draft(&sample_draft("tx-ghost", None, 100), None, None, false)
+            .unwrap();
+        let stored = attach(&ledger, "tx-ghost", "ghost.jpg");
+        let absolute = resolve_attachment_path(ledger.path(), &stored);
+        std::fs::remove_file(&absolute).unwrap();
+        assert!(!absolute.exists());
+
+        let report = ledger.purge_transaction("tx-ghost").unwrap();
+        assert_eq!(report.purged_transactions, 1);
+        assert_eq!(report.attachments.considered.len(), 1);
+        assert!(report.attachments.deleted.is_empty());
+        assert_eq!(report.attachments.already_missing.len(), 1);
+        let exists: i64 = ledger
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM transactions WHERE id='tx-ghost'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(exists, 0);
+        drop(ledger);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn purge_does_not_delete_orphan_attachment_without_db_row() {
+        let (dir, ledger) = disk_ledger("orphan-file");
+        ledger
+            .confirm_draft(&sample_draft("tx-keep", None, 100), None, None, false)
+            .unwrap();
+        ledger
+            .confirm_draft(&sample_draft("tx-gone", None, 200), None, None, false)
+            .unwrap();
+        let kept = attach(&ledger, "tx-keep", "keep.jpg");
+        let _gone = attach(&ledger, "tx-gone", "gone.jpg");
+        let kept_abs = resolve_attachment_path(ledger.path(), &kept);
+
+        // Orphan on disk with no matching transactions row.
+        let orphan_rel = "attachments/orphan-tx/orphan.jpg";
+        let orphan_abs = resolve_attachment_path(ledger.path(), orphan_rel);
+        std::fs::create_dir_all(orphan_abs.parent().unwrap()).unwrap();
+        std::fs::write(&orphan_abs, b"orphan").unwrap();
+
+        let report = ledger.purge_transaction("tx-gone").unwrap();
+        assert_eq!(report.purged_transactions, 1);
+        assert!(
+            orphan_abs.is_file(),
+            "orphan blob without DB row must not be deleted by unrelated purge"
+        );
+        assert!(kept_abs.is_file());
+        drop(ledger);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn post_commit_cleanup_guard_blocks_concurrent_reference_writes() {
         use rusqlite::ErrorCode;
         use std::sync::{Arc, Barrier};

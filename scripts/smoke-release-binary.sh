@@ -4,6 +4,13 @@
 #   ./scripts/smoke-release-binary.sh [path/to/rradar]
 # Env:
 #   RRADAR_FIXTURES  fixtures root (default: fixtures)
+#
+# Regression (v0.1.0-cli.32/.33 Windows): never write version JSON under
+# Git-Bash-only paths like /tmp. Native Windows python cannot open those.
+# Pipe JSON on stdin to Python instead.
+#
+# Also: do not trust a bare `python3` on PATH — Windows Store stubs often
+# exit 49 without importing json. Probe candidates that can `import json`.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -22,34 +29,36 @@ else
 fi
 
 FIX="${RRADAR_FIXTURES:-fixtures}"
-VJSON="${TMPDIR:-/tmp}/rradar-version-$$.json"
-# Windows Git Bash: prefer $TEMP when set
-if [[ -n "${TEMP:-}" ]]; then
-  VJSON="${TEMP}/rradar-version-$$.json"
-elif [[ -n "${TMP:-}" ]]; then
-  VJSON="${TMP}/rradar-version-$$.json"
-fi
 
 echo "smoke-release-binary | bin=$B fixtures=$FIX"
 "$B" version --long
-"$B" version --json | tee "$VJSON"
 "$B" engines
 "$B" release-check --fixtures "$FIX" --quiet
 "$B" help >/dev/null
 
-PY=python3
-if ! command -v python3 >/dev/null 2>&1; then
-  if command -v python >/dev/null 2>&1; then
-    PY=python
-  else
-    echo "error: python3/python required for schema assert" >&2
-    exit 2
-  fi
-fi
-"$PY" -c "
+pick_python() {
+  local cand
+  # Prefer `python` before `python3` on Windows (Store stub).
+  for cand in python python3 py; do
+    if command -v "$cand" >/dev/null 2>&1; then
+      if "$cand" -c "import json" >/dev/null 2>&1; then
+        printf '%s\n' "$cand"
+        return 0
+      fi
+    fi
+  done
+  return 1
+}
+
+PY="$(pick_python)" || {
+  echo "error: python/python3/py required for schema assert (and must import json)" >&2
+  exit 2
+}
+
+# Stream version JSON directly into Python (no temp path / encoding mismatch).
+"$B" version --json | "$PY" -c "
 import json, sys
-p = r'''$VJSON'''
-raw = open(p, 'rb').read()
+raw = sys.stdin.buffer.read()
 if raw.startswith(b'\xff\xfe'):
     s = raw.decode('utf-16-le')
 elif raw.startswith(b'\xfe\xff'):

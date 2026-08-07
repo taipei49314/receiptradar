@@ -165,6 +165,78 @@ fn version_long_and_json() {
 }
 
 #[test]
+fn attach_backup_restore_reads_attachment_bytes() {
+    let home = temp_case("attach-backup-restore");
+    let db = home.join("ledger.db");
+    let bak = home.join("pack.rradar");
+    let restored_home = home.join("restored");
+    let restored_db = restored_home.join("ledger.db");
+    std::fs::create_dir_all(&restored_home).unwrap();
+
+    let (id, attachment) = create_attached_transaction(&home, &db);
+    let original = std::fs::read(&attachment).unwrap();
+
+    let create = isolated_bin(&home, &db)
+        .args([
+            "backup",
+            "create",
+            "-p",
+            "test-pass",
+            "-o",
+            bak.to_str().unwrap(),
+            "--db",
+            db.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        create.status.success(),
+        "{}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+
+    let restore = isolated_bin(&home, &db)
+        .args([
+            "backup",
+            "restore",
+            "--in",
+            bak.to_str().unwrap(),
+            "-p",
+            "test-pass",
+            "--db",
+            restored_db.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        restore.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&restore.stdout),
+        String::from_utf8_lossy(&restore.stderr)
+    );
+
+    let show = isolated_bin(&restored_home, &restored_db)
+        .args(["show", &id, "--json", "--db", restored_db.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        show.status.success(),
+        "{}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    let row: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+    let stored = row["attachment_path"].as_str().expect("attachment_path");
+    let restored_file = restored_home.join(stored);
+    assert!(
+        restored_file.is_file(),
+        "missing restored attachment {}",
+        restored_file.display()
+    );
+    assert_eq!(std::fs::read(&restored_file).unwrap(), original);
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
 fn every_cli_purge_entry_point_cleans_attachments_and_emits_json() {
     for mode in ["purge", "delete-purge", "purge-all"] {
         let home = temp_case(mode);
