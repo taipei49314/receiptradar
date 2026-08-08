@@ -77,19 +77,13 @@ jobs:
 
       - name: guard release smoke against Windows /tmp path trap
         # Regression for v0.1.0-cli.32/.33: Git Bash /tmp is not readable by native Windows python.
+        # Logic lives in scripts/guard-windows-tmp-path-trap.sh so the CI step does not
+        # false-positive on its own diagnostic /tmp strings (docs/comments remain allowed).
         shell: bash
         run: |
           set -euo pipefail
-          if grep -nE 'TMPDIR:-/tmp|/tmp/rradar-version|tee "\$\{TMPDIR|tee /tmp/' scripts/smoke-release-binary.sh; then
-            echo "error: smoke-release-binary.sh must not write version JSON under Git-Bash /tmp" >&2
-            exit 1
-          fi
-          if grep -nE 'tee /tmp/rradar|/tmp/rradar-version' .github/workflows/release.yml .github/workflows/ci.yml; then
-            echo "error: workflows must not tee version JSON under /tmp" >&2
-            exit 1
-          fi
-          grep -q 'version --json |' scripts/smoke-release-binary.sh
-          grep -q 'SMOKE_RELEASE_BINARY_OK' scripts/smoke-release-binary.sh
+          bash scripts/guard-windows-tmp-path-trap.sh --self-test
+          bash scripts/guard-windows-tmp-path-trap.sh
 
       - name: release binary smoke
         shell: bash
