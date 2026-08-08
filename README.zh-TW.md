@@ -2,7 +2,9 @@
 
 **拍下發票，帳本留下——不上雲。**
 
-> **CLI 產品已完成**：可日常本機記帳（mock OCR + 文字/QR）。真 ONNX 與手機相機為後續層。
+> **已完成範圍（CLI release candidate）：** 本機記帳 closed loop（process → ledger → trash/restore/purge含附件清理 → export/backup → 本機 HTTP API）。預設 mock OCR + 文字/QR；真 ONNX 為可選。
+>
+> **不在本次完成範圍：** `apps/mobile` Flutter shell 為 **實驗/mock** UI（`MockRradarApi`），不屬於 CLI 產品候選。
 
 完整說明見 [README.md](./README.md) 與 [docs/cli.md](./docs/cli.md)。
 

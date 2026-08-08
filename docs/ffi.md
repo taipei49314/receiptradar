@@ -24,7 +24,7 @@ cargo build -p rradar-ffi --release
 |----------|---------|
 | `api_version` | Smoke string |
 | `product_id` / `core_version` | Branding |
-| `supported_ledger_schema` | Migration ceiling (v3) |
+| `supported_ledger_schema` | Migration ceiling (v4) |
 | `default_data_dir` / `default_ledger_path` | Paths |
 | `default_inbox_path` / `ensure_inbox` | Drop folder |
 | `default_rules_path` / `ensure_rules` | Rule packs dir |
@@ -49,7 +49,8 @@ cargo build -p rradar-ffi --release
 | `get_transaction_json` | Show one |
 | `last_transaction_json` | Last confirmed |
 | `delete_transaction` | Soft-delete (v4 trash) |
-| `restore_transaction` / `purge_transaction` / `purge_trash_json` | Trash lifecycle |
+| `restore_transaction` | Restore a soft-deleted row |
+| `purge_transaction` / `purge_trash_json` | Hard purge; return the same structured cleanup-report JSON |
 | `list_trash_json` / `integrity_json` | Trash list + PRAGMA integrity |
 | `update_transaction_json` | Edit fields (+ **tags**, **attachment_path**; empty string clears) |
 | `attach_file_json` | Copy local file into `{db}/attachments/{id}/` + set path |
@@ -64,6 +65,26 @@ cargo build -p rradar-ffi --release
 | `report_month_markdown` | Monthly report |
 | `top_merchants_json` | Rankings |
 | `categories_json` | Taxonomy ids |
+
+Both purge functions return JSON shaped like:
+
+```json
+{
+  "purged_transactions": 1,
+  "attachments": {
+    "considered": [{"transaction_id":"...","path":"attachments/.../receipt.jpg"}],
+    "deleted": [],
+    "already_missing": [],
+    "shared_references_skipped": [],
+    "duplicate_candidates_skipped": [],
+    "unsafe_paths_skipped": [],
+    "cleanup_errors": [],
+    "empty_dirs_removed": []
+  }
+}
+```
+
+SQLite work commits before filesystem cleanup. For `.rrsealed`, the updated encrypted file is atomically persisted before cleanup begins. Therefore a successful result can contain `cleanup_errors`; callers must display or persist them instead of treating serialization success as full file cleanup. Existing row-decoding failures roll back the delete. A sealed persistence failure returns `Err(String)` and no filesystem cleanup is attempted. Cleanup-lock acquisition, refreshed-query, and lock-release failures occur after the durable purge, so they are recorded in the report with `purged_transactions` preserved.
 
 ### Rules / models
 | Function | Purpose |

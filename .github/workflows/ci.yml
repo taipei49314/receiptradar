@@ -59,10 +59,11 @@ jobs:
           cargo run -p rradar-cli --locked -- process fixtures/text/familymart_89.txt --confirm --quiet --db "$DB"
           ID=$(cargo run -p rradar-cli --locked -- last --db "$DB" | python -c "import sys,json; print(json.load(sys.stdin)['id'])")
           cargo run -p rradar-cli --locked -- delete "$ID" --yes --db "$DB"
-          cargo run -p rradar-cli --locked -- trash --db "$DB" | tee /tmp/rradar-trash.out
+          # Prefer repo-local paths over /tmp (Windows native tools cannot read MSYS /tmp).
+          cargo run -p rradar-cli --locked -- trash --db "$DB" | tee target/ci-trash/trash.out
           cargo run -p rradar-cli --locked -- restore "$ID" --db "$DB"
-          cargo run -p rradar-cli --locked -- count --db "$DB" | tee /tmp/rradar-count.out
-          grep -E '1 active|active \| 0 trash|active' /tmp/rradar-count.out
+          cargo run -p rradar-cli --locked -- count --db "$DB" | tee target/ci-trash/count.out
+          grep -E '1 active|active \| 0 trash|active' target/ci-trash/count.out
           cargo run -p rradar-cli --locked -- doctor
 
       - name: demo closed-loop
@@ -74,15 +75,24 @@ jobs:
       - name: release-check preflight
         run: cargo run -p rradar-cli --locked -- release-check --fixtures fixtures --quiet
 
+      - name: guard release smoke against Windows /tmp path trap
+        # Regression for v0.1.0-cli.32/.33: Git Bash /tmp is not readable by native Windows python.
+        # Logic lives in scripts/guard-windows-tmp-path-trap.sh so the CI step does not
+        # false-positive on its own diagnostic /tmp strings (docs/comments remain allowed).
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/guard-windows-tmp-path-trap.sh --self-test
+          bash scripts/guard-windows-tmp-path-trap.sh
+
       - name: release binary smoke
         shell: bash
         run: |
           set -euo pipefail
           cargo build --release -p rradar-cli --locked
           if [[ -f target/release/rradar.exe ]]; then B=target/release/rradar.exe; else B=target/release/rradar; fi
-          "$B" version --long
-          "$B" engines
-          "$B" release-check --fixtures fixtures --quiet
+          # Must use scripts/smoke-release-binary.sh (stdin JSON to python; no /tmp).
+          bash scripts/smoke-release-binary.sh "$B"
           "$B" demo --fixtures fixtures --db target/ci-release-demo/ledger.db --quiet
 
       - name: network audit

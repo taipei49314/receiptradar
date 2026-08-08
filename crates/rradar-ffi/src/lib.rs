@@ -178,6 +178,7 @@ fn with_ledger<T>(
     let (ledger, tmp) =
         open_ledger_auto(Path::new(db_path), passphrase).map_err(|e| e.to_string())?;
     let out = f(&ledger);
+    drop(ledger);
     if let Some(t) = tmp {
         let _ = std::fs::remove_file(t);
     }
@@ -706,22 +707,23 @@ pub fn restore_transaction(
     })
 }
 
-/// Hard-delete one row (purge).
+/// Hard-delete one row and return the structured purge/attachment cleanup report JSON.
 pub fn purge_transaction(
     db_path: String,
     passphrase: Option<String>,
     id: String,
-) -> Result<bool, String> {
+) -> Result<String, String> {
     with_ledger(&db_path, passphrase.as_deref(), |ledger| {
-        ledger.purge_transaction(&id).map_err(|e| e.to_string())
+        let report = ledger.purge_transaction(&id).map_err(|e| e.to_string())?;
+        serde_json::to_string(&report).map_err(|error| error.to_string())
     })
 }
 
-/// Hard-delete all trash. Returns removed count.
+/// Hard-delete all trash and return the structured purge/attachment cleanup report JSON.
 pub fn purge_trash_json(db_path: String, passphrase: Option<String>) -> Result<String, String> {
     with_ledger(&db_path, passphrase.as_deref(), |ledger| {
-        let n = ledger.purge_trash().map_err(|e| e.to_string())?;
-        Ok(serde_json::json!({ "purged": n, "local_only": true }).to_string())
+        let report = ledger.purge_trash().map_err(|e| e.to_string())?;
+        serde_json::to_string(&report).map_err(|error| error.to_string())
     })
 }
 
@@ -1231,6 +1233,14 @@ pub fn handoff_apply_merge_json(
 mod tests {
     use super::*;
 
+    fn temp_case(label: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("rradar-ffi-{label}-{}-{nonce}", std::process::id()))
+    }
+
     #[test]
     fn version_and_capabilities() {
         assert!(api_version().contains("ffi"));
@@ -1255,6 +1265,187 @@ mod tests {
         assert!(eng.contains("auto_resolves_to"));
         let _ = list_rule_packs_json();
         let _ = models_pins_json(String::new()).unwrap_or_default();
+    }
+
+    #[test]
+    fn purge_single_and_trash_return_cleanup_report_json() {
+        let dir = temp_case("purge");
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("ledger.db");
+        ensure_ledger(db.display().to_string()).unwrap();
+
+        let mut first = b"RRADAR_MOCK_OCR\n".to_vec();
+        first.extend_from_slice(b"FIRST SHOP\nTOTAL 10\n2024-01-01\n");
+        process_confirm_bytes_json(
+            db.display().to_string(),
+            None,
+            first,
+            "first.bin".into(),
+            r#"{"confirm":true,"attach":true,"currency":"TWD"}"#.into(),
+        )
+        .unwrap();
+        let first_tx: serde_json::Value =
+            serde_json::from_str(&last_transaction_json(db.display().to_string(), None).unwrap())
+                .unwrap();
+        let first_id = first_tx["id"].as_str().unwrap().to_owned();
+        let first_stored = first_tx["attachment_path"].as_str().unwrap().to_owned();
+        let first_file = resolve_attachment_path(&db, &first_stored);
+        assert!(first_file.is_file());
+
+        let single_json = purge_transaction(db.display().to_string(), None, first_id).unwrap();
+        let single: serde_json::Value = serde_json::from_str(&single_json).unwrap();
+        assert_eq!(single["purged_transactions"].as_u64(), Some(1));
+        assert_eq!(
+            single["attachments"]["deleted"].as_array().unwrap().len(),
+            1
+        );
+        assert!(!first_file.exists());
+
+        let mut second = b"RRADAR_MOCK_OCR\n".to_vec();
+        second.extend_from_slice(b"SECOND SHOP\nTOTAL 20\n2024-01-02\n");
+        process_confirm_bytes_json(
+            db.display().to_string(),
+            None,
+            second,
+            "second.bin".into(),
+            r#"{"confirm":true,"attach":true,"currency":"TWD"}"#.into(),
+        )
+        .unwrap();
+        let second_tx: serde_json::Value =
+            serde_json::from_str(&last_transaction_json(db.display().to_string(), None).unwrap())
+                .unwrap();
+        let second_id = second_tx["id"].as_str().unwrap().to_owned();
+        let second_stored = second_tx["attachment_path"].as_str().unwrap().to_owned();
+        let second_file = resolve_attachment_path(&db, &second_stored);
+        assert!(delete_transaction(db.display().to_string(), None, second_id).unwrap());
+
+        let trash_json = purge_trash_json(db.display().to_string(), None).unwrap();
+        let trash: serde_json::Value = serde_json::from_str(&trash_json).unwrap();
+        assert_eq!(trash["purged_transactions"].as_u64(), Some(1));
+        assert_eq!(trash["attachments"]["deleted"].as_array().unwrap().len(), 1);
+        assert!(!second_file.exists());
+
+        let mut third = b"RRADAR_MOCK_OCR\n".to_vec();
+        third.extend_from_slice(b"THIRD SHOP\nTOTAL 30\n2024-01-03\n");
+        process_confirm_bytes_json(
+            db.display().to_string(),
+            None,
+            third,
+            "third.bin".into(),
+            r#"{"confirm":true,"attach":true,"currency":"TWD"}"#.into(),
+        )
+        .unwrap();
+        let third_tx: serde_json::Value =
+            serde_json::from_str(&last_transaction_json(db.display().to_string(), None).unwrap())
+                .unwrap();
+        let third_id = third_tx["id"].as_str().unwrap().to_owned();
+        let third_stored = third_tx["attachment_path"].as_str().unwrap();
+        let third_file = resolve_attachment_path(&db, third_stored);
+        std::fs::remove_file(&third_file).unwrap();
+        std::fs::create_dir(&third_file).unwrap();
+
+        let failure_json = purge_transaction(db.display().to_string(), None, third_id).unwrap();
+        let failure: serde_json::Value = serde_json::from_str(&failure_json).unwrap();
+        assert_eq!(failure["purged_transactions"].as_u64(), Some(1));
+        assert_eq!(
+            failure["attachments"]["cleanup_errors"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let mut fourth = b"RRADAR_MOCK_OCR\n".to_vec();
+        fourth.extend_from_slice(b"FOURTH SHOP\nTOTAL 40\n2024-01-04\n");
+        process_confirm_bytes_json(
+            db.display().to_string(),
+            None,
+            fourth,
+            "fourth.bin".into(),
+            r#"{"confirm":true,"attach":false,"currency":"TWD"}"#.into(),
+        )
+        .unwrap();
+        let fourth_tx: serde_json::Value =
+            serde_json::from_str(&last_transaction_json(db.display().to_string(), None).unwrap())
+                .unwrap();
+        let fourth_id = fourth_tx["id"].as_str().unwrap().to_owned();
+        {
+            let ledger = Ledger::open(&db).unwrap();
+            ledger
+                .connection()
+                .execute(
+                    "UPDATE transactions SET attachment_path = X'80' WHERE id = ?1",
+                    [&fourth_id],
+                )
+                .unwrap();
+        }
+        assert!(purge_transaction(db.display().to_string(), None, fourth_id.clone()).is_err());
+        let ledger = Ledger::open(&db).unwrap();
+        let exists: i64 = ledger
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM transactions WHERE id = ?1",
+                [&fourth_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(exists, 1);
+        drop(ledger);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn ffi_sealed_purge_persists_before_attachment_cleanup() {
+        let dir = temp_case("sealed-purge");
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("ledger.db");
+        let sealed = dir.join("ledger.rrsealed");
+        ensure_ledger(db.display().to_string()).unwrap();
+
+        let mut receipt = b"RRADAR_MOCK_OCR\n".to_vec();
+        receipt.extend_from_slice(b"SEALED SHOP\nTOTAL 10\n2024-01-01\n");
+        process_confirm_bytes_json(
+            db.display().to_string(),
+            None,
+            receipt,
+            "sealed.bin".into(),
+            r#"{"confirm":true,"attach":true,"currency":"TWD"}"#.into(),
+        )
+        .unwrap();
+        let transaction: serde_json::Value =
+            serde_json::from_str(&last_transaction_json(db.display().to_string(), None).unwrap())
+                .unwrap();
+        let id = transaction["id"].as_str().unwrap().to_owned();
+        let stored = transaction["attachment_path"].as_str().unwrap();
+        let attachment = resolve_attachment_path(&db, stored);
+        {
+            let ledger = Ledger::open(&db).unwrap();
+            rradar_core::save_sealed(&ledger, &sealed, "test-passphrase").unwrap();
+        }
+
+        let report_json = purge_transaction(
+            sealed.display().to_string(),
+            Some("test-passphrase".into()),
+            id,
+        )
+        .unwrap();
+        let report: serde_json::Value = serde_json::from_str(&report_json).unwrap();
+        assert_eq!(report["purged_transactions"].as_u64(), Some(1));
+        assert_eq!(
+            report["attachments"]["deleted"].as_array().map(Vec::len),
+            Some(1)
+        );
+        assert!(!attachment.exists());
+
+        let (reopened, tmp) =
+            rradar_core::open_ledger_auto(&sealed, Some("test-passphrase")).unwrap();
+        assert_eq!(reopened.count().unwrap(), 0);
+        drop(reopened);
+        if let Some(tmp) = tmp {
+            std::fs::remove_file(tmp).unwrap();
+        }
+        assert!(dir.join("attachments").is_dir());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

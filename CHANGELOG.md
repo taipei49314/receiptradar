@@ -3,6 +3,7 @@
 ## 0.1.0-alpha (unreleased)
 
 ### Fixed
+- **Release Windows smoke `/tmp` path:** `scripts/smoke-release-binary.sh` pipes `version --json` to Python on stdin (no Git-Bash `/tmp` file). Root cause of failed tags `v0.1.0-cli.32` / `v0.1.0-cli.33`. Python picker prefers a real interpreter (`import json`) over Windows Store `python3` stubs (exit 49). CI soft-delete + release-binary steps avoid `/tmp`; workflow guard rejects regressions.
 - Network audit allowlist for loopback/`rradar serve` (restore CI green after local HTTP API)
 - Windows CI: mock OCR fixtures tolerate CRLF magic terminators; `.gitattributes` marks `fixtures/mock_ocr/**` binary
 
@@ -18,6 +19,7 @@
 - **Release workflow YAML** broken by unindented inline Python (tag v0.1.0-cli.31 failed to parse); packaging uses `scripts/write-release-version.py`
 
 ### Added
+- **Safe attachment GC on purge:** the real `Ledger::purge_transaction` / `purge_trash` APIs now commit SQLite deletion (and atomically persist `.rrsealed`) before best-effort filesystem cleanup and return a serializable report. CLI `purge`, `delete --purge`, and both FFI purge surfaces expose the report; strict path ownership/component checks, canonical shared-reference protection, batch deduplication, plaintext SQLite writer guarding, and structured cleanup errors are covered by core/CLI/FFI tests.
 - **ONNX fixtures matrix (axis #1):** `fixtures verify --engine onnx|auto --onnx-smoke` with `force_ocr` on synthetic PNGs
 - **Release/CI schema v4 productization (axis #4):** release `VERSION`/`version.json` from binary; pack ledger-schema docs; release-check soft-delete+integrity; CI trash smoke; verify-install requires schema ≥ 4
 - **Ledger schema v4 soft-delete (axis #2):** `deleted_at` trash/restore/purge; stats/list/export skip trash; `rradar trash|restore|purge`; doctor integrity; FFI trash surface

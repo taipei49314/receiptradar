@@ -17,6 +17,55 @@ fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/text/familymart_89.txt")
 }
 
+fn temp_case(label: &str) -> PathBuf {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!("rradar-cli-{label}-{}-{nonce}", std::process::id()))
+}
+
+fn isolated_bin(home: &std::path::Path, db: &std::path::Path) -> Command {
+    let mut command = bin();
+    command.env("RRADAR_HOME", home).env("RRADAR_DB", db);
+    command
+}
+
+fn create_attached_transaction(home: &std::path::Path, db: &std::path::Path) -> (String, PathBuf) {
+    std::fs::create_dir_all(home).unwrap();
+    let fixture = fixtures();
+    let output = isolated_bin(home, db)
+        .args([
+            "process",
+            fixture.to_str().unwrap(),
+            "--confirm",
+            "--attach",
+            "--quiet",
+            "--db",
+            db.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "process: {}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let listed = isolated_bin(home, db)
+        .args(["list", "--json", "--db", db.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(listed.status.success());
+    let rows: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
+    let row = &rows[0];
+    let id = row["id"].as_str().unwrap().to_owned();
+    let stored = row["attachment_path"].as_str().unwrap();
+    let file = home.join(stored);
+    assert!(file.is_file(), "missing attachment: {}", file.display());
+    (id, file)
+}
+
 #[test]
 fn init_process_list_stats_export_edit_delete() {
     let fx = fixtures();
@@ -113,6 +162,282 @@ fn version_long_and_json() {
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(s.contains("\"product_id\""), "{s}");
     assert!(s.contains("\"ledger_schema\""), "{s}");
+}
+
+#[test]
+fn attach_backup_restore_reads_attachment_bytes() {
+    let home = temp_case("attach-backup-restore");
+    let db = home.join("ledger.db");
+    let bak = home.join("pack.rradar");
+    let restored_home = home.join("restored");
+    let restored_db = restored_home.join("ledger.db");
+    std::fs::create_dir_all(&restored_home).unwrap();
+
+    let (id, attachment) = create_attached_transaction(&home, &db);
+    let original = std::fs::read(&attachment).unwrap();
+
+    let create = isolated_bin(&home, &db)
+        .args([
+            "backup",
+            "create",
+            "-p",
+            "test-pass",
+            "-o",
+            bak.to_str().unwrap(),
+            "--db",
+            db.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        create.status.success(),
+        "{}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+
+    let restore = isolated_bin(&home, &db)
+        .args([
+            "backup",
+            "restore",
+            "--in",
+            bak.to_str().unwrap(),
+            "-p",
+            "test-pass",
+            "--db",
+            restored_db.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        restore.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&restore.stdout),
+        String::from_utf8_lossy(&restore.stderr)
+    );
+
+    let show = isolated_bin(&restored_home, &restored_db)
+        .args(["show", &id, "--json", "--db", restored_db.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        show.status.success(),
+        "{}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    let row: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+    let stored = row["attachment_path"].as_str().expect("attachment_path");
+    let restored_file = restored_home.join(stored);
+    assert!(
+        restored_file.is_file(),
+        "missing restored attachment {}",
+        restored_file.display()
+    );
+    assert_eq!(std::fs::read(&restored_file).unwrap(), original);
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn every_cli_purge_entry_point_cleans_attachments_and_emits_json() {
+    for mode in ["purge", "delete-purge", "purge-all"] {
+        let home = temp_case(mode);
+        let db = home.join("ledger.db");
+        let (id, attachment) = create_attached_transaction(&home, &db);
+
+        if mode == "purge-all" {
+            let trashed = isolated_bin(&home, &db)
+                .args(["delete", &id, "--yes", "--db", db.to_str().unwrap()])
+                .output()
+                .unwrap();
+            assert!(
+                trashed.status.success(),
+                "{}",
+                String::from_utf8_lossy(&trashed.stderr)
+            );
+        }
+
+        let output = match mode {
+            "purge" => isolated_bin(&home, &db)
+                .args([
+                    "purge",
+                    &id,
+                    "--yes",
+                    "--json",
+                    "--db",
+                    db.to_str().unwrap(),
+                ])
+                .output()
+                .unwrap(),
+            "delete-purge" => isolated_bin(&home, &db)
+                .args([
+                    "delete",
+                    &id,
+                    "--yes",
+                    "--purge",
+                    "--json",
+                    "--db",
+                    db.to_str().unwrap(),
+                ])
+                .output()
+                .unwrap(),
+            "purge-all" => isolated_bin(&home, &db)
+                .args([
+                    "purge",
+                    "--all",
+                    "--yes",
+                    "--json",
+                    "--db",
+                    db.to_str().unwrap(),
+                ])
+                .output()
+                .unwrap(),
+            _ => unreachable!(),
+        };
+        assert!(
+            output.status.success(),
+            "{mode}: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["purged_transactions"].as_u64(), Some(1), "{report}");
+        assert_eq!(
+            report["attachments"]["deleted"].as_array().map(Vec::len),
+            Some(1),
+            "{report}"
+        );
+        assert!(!attachment.exists(), "{mode} left attachment behind");
+        assert!(home.join("attachments").is_dir());
+        std::fs::remove_dir_all(home).unwrap();
+    }
+}
+
+#[test]
+fn cli_purge_refusal_and_post_commit_cleanup_failure_are_honest() {
+    let home = temp_case("purge-failure");
+    let db = home.join("ledger.db");
+    let (id, attachment) = create_attached_transaction(&home, &db);
+
+    let refused = isolated_bin(&home, &db)
+        .args(["purge", &id, "--db", db.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    assert!(attachment.is_file());
+
+    std::fs::remove_file(&attachment).unwrap();
+    std::fs::create_dir(&attachment).unwrap();
+    let output = isolated_bin(&home, &db)
+        .args([
+            "purge",
+            &id,
+            "--yes",
+            "--json",
+            "--db",
+            db.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["purged_transactions"].as_u64(), Some(1));
+    assert_eq!(
+        report["attachments"]["cleanup_errors"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    let rows = isolated_bin(&home, &db)
+        .args(["list", "--json", "--db", db.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let rows: serde_json::Value = serde_json::from_slice(&rows.stdout).unwrap();
+    assert_eq!(rows.as_array().map(Vec::len), Some(0));
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn cli_purge_of_sealed_ledger_persists_before_attachment_cleanup() {
+    let home = temp_case("sealed-purge");
+    let db = home.join("ledger.db");
+    let sealed = home.join("ledger.rrsealed");
+    let reopened = home.join("reopened.db");
+    let (id, attachment) = create_attached_transaction(&home, &db);
+
+    let seal = isolated_bin(&home, &db)
+        .args([
+            "seal",
+            "--db",
+            db.to_str().unwrap(),
+            "--out",
+            sealed.to_str().unwrap(),
+            "--passphrase",
+            "test-passphrase",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        seal.status.success(),
+        "{}",
+        String::from_utf8_lossy(&seal.stderr)
+    );
+
+    let purge = isolated_bin(&home, &sealed)
+        .args([
+            "purge",
+            &id,
+            "--yes",
+            "--json",
+            "--db",
+            sealed.to_str().unwrap(),
+            "--passphrase",
+            "test-passphrase",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        purge.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&purge.stdout),
+        String::from_utf8_lossy(&purge.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&purge.stdout).unwrap();
+    assert_eq!(report["purged_transactions"].as_u64(), Some(1));
+    assert_eq!(
+        report["attachments"]["deleted"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert!(!attachment.exists());
+
+    let unseal = isolated_bin(&home, &sealed)
+        .args([
+            "unseal",
+            "--in",
+            sealed.to_str().unwrap(),
+            "--out",
+            reopened.to_str().unwrap(),
+            "--passphrase",
+            "test-passphrase",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        unseal.status.success(),
+        "{}",
+        String::from_utf8_lossy(&unseal.stderr)
+    );
+    let rows = isolated_bin(&home, &reopened)
+        .args(["list", "--json", "--db", reopened.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let rows: serde_json::Value = serde_json::from_slice(&rows.stdout).unwrap();
+    assert_eq!(rows.as_array().map(Vec::len), Some(0));
+    assert!(home.join("attachments").is_dir());
+    std::fs::remove_dir_all(home).unwrap();
 }
 
 #[test]
