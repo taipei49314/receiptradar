@@ -20,11 +20,14 @@ Cross-platform install: **[docs/INSTALL.md](./docs/INSTALL.md)** (source, GitHub
 ```bash
 cargo install --path crates/rradar-cli --locked
 rradar version --long
-# From repo root — full closed loop (parse → ledger → export → CSV/backup merge → API)
+# 30s Taiwan daily path (preferred GIF clip)
+rradar day               # DAY_OK; isolated day ledger (add --as-today → today)
+# Full closed loop (parse → ledger → export → CSV/backup merge → API)
 rradar fixtures verify   # offline matrix totals (text + mock + synthetic photos)
 rradar demo              # DEMO_OK; isolated demo ledger
 # Synthetic receipt PNGs (regen): cargo run -p gen-receipt-png -- fixtures/images
 # Windows helper / GIF narrative:
+#   powershell -File scripts/day.ps1
 #   powershell -File scripts/demo.ps1
 #   powershell -File scripts/record-demo.ps1
 # Binary from latest GitHub Release:
@@ -35,7 +38,8 @@ rradar demo              # DEMO_OK; isolated demo ledger
 Daily use after `rradar init`:
 
 ```bash
-rradar process fixtures/text/familymart_89.txt --confirm --explain --tags work,lunch
+rradar add fixtures/text/familymart_89.txt --as-today --explain --tags work,lunch
+rradar today
 rradar list --tag work
 rradar budget set --currency TWD --monthly 30000
 rradar budget status

@@ -77,10 +77,73 @@ impl AliasBook {
 
     /// Exact match rewrite; returns original if no alias.
     pub fn apply(&self, merchant: &str) -> String {
-        self.map
-            .get(merchant)
-            .cloned()
+        self.display_for(merchant)
+    }
+
+    /// Display name: exact alias, else longest key contained in / prefix of merchant.
+    pub fn display_for(&self, merchant: &str) -> String {
+        let m = merchant.trim();
+        if m.is_empty() {
+            return merchant.to_string();
+        }
+        if let Some(v) = self.map.get(m) {
+            return v.clone();
+        }
+        let mut best: Option<(&String, &String)> = None;
+        for (k, v) in &self.map {
+            if k.is_empty() {
+                continue;
+            }
+            let hit = m == k.as_str() || m.starts_with(k) || m.contains(k.as_str());
+            if !hit {
+                continue;
+            }
+            let better = match best {
+                None => true,
+                Some((bk, _)) => k.len() > bk.len(),
+            };
+            if better {
+                best = Some((k, v));
+            }
+        }
+        best.map(|(_, v)| v.clone())
             .unwrap_or_else(|| merchant.to_string())
+    }
+
+    /// Seed common TW short names when the book is empty (init / first today).
+    pub fn ensure_tw_defaults(&mut self) -> bool {
+        if !self.map.is_empty() {
+            return false;
+        }
+        let pairs = [
+            ("全家便利商店", "全家"),
+            ("全家", "全家"),
+            ("7-ELEVEN", "7-ELEVEN"),
+            ("萊爾富", "萊爾富"),
+            ("OK超商", "OK超商"),
+            ("全聯福利中心", "全聯"),
+            ("家樂福", "家樂福"),
+            ("好市多 Costco", "好市多"),
+            ("好市多", "好市多"),
+            ("麥當勞", "麥當勞"),
+            ("肯德基 KFC", "肯德基"),
+            ("肯德基", "肯德基"),
+            ("鼎泰豐", "鼎泰豐"),
+            ("台北捷運", "北捷"),
+            ("台灣高鐵", "高鐵"),
+            ("台灣中油", "中油"),
+            ("屈臣氏", "屈臣氏"),
+            ("康是美", "康是美"),
+            ("中華電信", "中華電信"),
+            ("麥味登", "麥味登"),
+            ("50嵐", "50嵐"),
+            ("可不可熟成紅茶", "可不可"),
+            ("ibon", "ibon"),
+        ];
+        for (from, to) in pairs {
+            self.set(from, to);
+        }
+        true
     }
 }
 
@@ -146,6 +209,16 @@ FAMILYMART = 全家
         assert_eq!(book.apply("全家便利商店"), "全家");
         assert_eq!(book.apply("FAMILYMART"), "全家");
         assert_eq!(book.apply("unknown"), "unknown");
+        assert_eq!(book.display_for("全家便利商店 臨江店"), "全家");
+    }
+
+    #[test]
+    fn tw_defaults_shorten_branch_names() {
+        let mut b = AliasBook::default();
+        assert!(b.ensure_tw_defaults());
+        assert!(!b.ensure_tw_defaults()); // already filled
+        assert_eq!(b.display_for("全家便利商店 臨江店"), "全家");
+        assert_eq!(b.display_for("麥當勞 忠孝店"), "麥當勞");
     }
 
     #[test]

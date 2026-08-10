@@ -10,7 +10,7 @@ use rradar_core::{
     monthly_markdown_with_budgets, normalize_tags, open_ledger_auto, process_path,
     remove_stored_attachment, resolve_attachment_path, restore_backup, rules_dir, save_sealed,
     store_attachment, transactions_from_backup, transactions_from_csv, transactions_to_csv,
-    transactions_to_json, verify_backup, write_handoff_file, write_restored_aliases,
+    transactions_to_json, utc_now_iso, verify_backup, write_handoff_file, write_restored_aliases,
     write_restored_attachments, write_restored_budgets, write_restored_db, AliasBook, AppConfig,
     BudgetBook, Iso4217, Money, ProcessOptions, PurgeReport, ReceiptDraft, Transaction, TxFilter,
     TxUpdate, UserEdits, LEDGER_SCHEMA_VERSION, PRODUCT_ID, VERSION,
@@ -42,9 +42,14 @@ fn main() -> ExitCode {
         "engines" => cmd_engines(&args[1..]),
         "licenses" | "notices" => cmd_licenses(&args[1..]),
         "release-check" | "self-check" => cmd_release_check(&args[1..]),
+        "measure" | "probe" => cmd_measure(&args[1..]),
         "demo" => cmd_demo(&args[1..]),
+        "day" => cmd_day(&args[1..]),
         "fixtures" => cmd_fixtures(&args[1..]),
-        "process" | "add" => cmd_process(&args[1..]),
+        "process" => cmd_process(&args[1..], false),
+        // Daily path: `add` writes to the ledger by default (no need for -c).
+        "add" => cmd_process(&args[1..], true),
+        "today" | "home" | "status" => cmd_today(&args[1..]),
         "ocr" => cmd_ocr(&args[1..]),
         "bench" => cmd_bench(&args[1..]),
         "manual" | "entry" => cmd_manual(&args[1..]),
@@ -66,7 +71,9 @@ fn main() -> ExitCode {
         "stats" => cmd_stats(&args[1..]),
         "top" => cmd_top(&args[1..]),
         "report" => cmd_report(&args[1..]),
+        "month" | "close" | "monthly" => cmd_month(&args[1..]),
         "watch" => cmd_watch(&args[1..]),
+        "scoop" | "catch" => cmd_scoop(&args[1..]),
         "inbox" => cmd_inbox(&args[1..]),
         "serve" => cmd_serve(&args[1..]),
         "api-smoke" => cmd_api_smoke(&args[1..]),
@@ -482,6 +489,1076 @@ fn cmd_release_check(args: &[String]) -> Result<(), String> {
     }
 }
 
+/// Behavioral measurer for the daily-path surface (Phases 1–7).
+/// Does **not** trust features until each probe passes. Prints explicit blind spots.
+fn cmd_measure(args: &[String]) -> Result<(), String> {
+    let mut fixtures_root: Option<PathBuf> = None;
+    let mut quiet = false;
+    let mut json = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--fixtures" => {
+                i += 1;
+                fixtures_root = Some(PathBuf::from(args.get(i).ok_or("--fixtures needs path")?));
+            }
+            "--quiet" | "-q" => quiet = true,
+            "--json" => json = true,
+            "--help" | "-h" => {
+                print_topic_help("measure")?;
+                return Ok(());
+            }
+            other => return Err(format!("unknown measure flag `{other}`")),
+        }
+        i += 1;
+    }
+
+    let fixtures = fixtures_root
+        .or_else(|| env::var_os("RRADAR_FIXTURES").map(PathBuf::from))
+        .unwrap_or_else(find_fixtures_dir);
+    if !fixtures.is_dir() {
+        return Err(format!(
+            "fixtures not found at {} — run from repo root or pass --fixtures",
+            fixtures.display()
+        ));
+    }
+
+    // Isolated sandbox — never touch the personal ledger.
+    let stamp = utc_now_iso().replace([':', '-'], "");
+    let home = std::env::temp_dir().join(format!("rradar-measure-{stamp}"));
+    let db = home.join("ledger.db");
+    let inbox = home.join("inbox");
+    let _ = std::fs::create_dir_all(&inbox);
+    let prev_home = env::var_os("RRADAR_HOME");
+    let prev_db = env::var_os("RRADAR_DB");
+    let prev_inbox = env::var_os("RRADAR_INBOX");
+    env::set_var("RRADAR_HOME", &home);
+    env::set_var("RRADAR_DB", &db);
+    env::set_var("RRADAR_INBOX", &inbox);
+
+    let mut probes: Vec<serde_json::Value> = Vec::new();
+    let mut failed = 0usize;
+    let mut record = |id: &str, ok: bool, detail: &str| {
+        if !ok {
+            failed += 1;
+        }
+        if !quiet && !json {
+            let mark = if ok { "PASS" } else { "FAIL" };
+            println!("  {mark} | {id} | {detail}");
+        }
+        probes.push(serde_json::json!({
+            "id": id,
+            "ok": ok,
+            "detail": detail,
+        }));
+    };
+
+    if !quiet && !json {
+        println!("rradar measure — daily-path behavioral probes (isolated)");
+        println!("sandbox | {}", home.display());
+        println!("trust   | only PASS probes; FAIL = do not trust yet");
+        println!();
+    }
+
+    // --- Probe matrix -------------------------------------------------------
+    let fam = fixtures.join("text/familymart_89.txt");
+    let tea = fixtures.join("text/bubbletea_50lan_tw.txt");
+    let cht = fixtures.join("text/cht_bill_tw.txt");
+    let ibon = fixtures.join("text/ibon_print_tw.txt");
+
+    // P1: add confirms without -c
+    if fam.is_file() {
+        let r = cmd_process(
+            &[
+                fam.display().to_string(),
+                "--quiet".into(),
+                "--db".into(),
+                db.display().to_string(),
+            ],
+            true,
+        );
+        let n = open_db(&DbFlags {
+            db: db.clone(),
+            passphrase: None,
+        })
+        .ok()
+        .and_then(|(led, tmp)| {
+            let c = led.count().ok();
+            if let Some(t) = tmp {
+                let _ = std::fs::remove_file(t);
+            }
+            c
+        });
+        record(
+            "add_default_confirm",
+            r.is_ok() && n == Some(1),
+            &format!("status={r:?} count={n:?}"),
+        );
+    } else {
+        record("add_default_confirm", false, "fixture missing");
+    }
+
+    // P1: preview does not write
+    let before = open_db(&DbFlags {
+        db: db.clone(),
+        passphrase: None,
+    })
+    .ok()
+    .and_then(|(led, tmp)| {
+        let c = led.count().ok();
+        if let Some(t) = tmp {
+            let _ = std::fs::remove_file(t);
+        }
+        c
+    })
+    .unwrap_or(0);
+    if fam.is_file() {
+        let _ = cmd_process(
+            &[
+                fam.display().to_string(),
+                "--preview".into(),
+                "--quiet".into(),
+                "--db".into(),
+                db.display().to_string(),
+            ],
+            true,
+        );
+        let after = open_db(&DbFlags {
+            db: db.clone(),
+            passphrase: None,
+        })
+        .ok()
+        .and_then(|(led, tmp)| {
+            let c = led.count().ok();
+            if let Some(t) = tmp {
+                let _ = std::fs::remove_file(t);
+            }
+            c
+        })
+        .unwrap_or(0);
+        record(
+            "add_preview_no_write",
+            after == before,
+            &format!("before={before} after={after}"),
+        );
+    } else {
+        record("add_preview_no_write", false, "fixture missing");
+    }
+
+    // Wipe for clean as-today / today probes
+    wipe_sqlite(&db);
+
+    // P2: --as-today lands in current UTC month
+    if fam.is_file() {
+        let _ = cmd_process(
+            &[
+                fam.display().to_string(),
+                "--as-today".into(),
+                "--quiet".into(),
+                "--db".into(),
+                db.display().to_string(),
+            ],
+            true,
+        );
+        let (y, m) = current_year_month();
+        let period = format!("{y:04}-{m:02}");
+        let ok = open_db(&DbFlags {
+            db: db.clone(),
+            passphrase: None,
+        })
+        .ok()
+        .and_then(|(led, tmp)| {
+            let rows = led.list_by_month(y, m, 10).ok();
+            if let Some(t) = tmp {
+                let _ = std::fs::remove_file(t);
+            }
+            rows
+        })
+        .map(|r| !r.is_empty() && r[0].transacted_at.starts_with(&period))
+        .unwrap_or(false);
+        record(
+            "as_today_current_month",
+            ok,
+            &format!("expect period {period}"),
+        );
+    } else {
+        record("as_today_current_month", false, "fixture missing");
+    }
+
+    // P1/P2: today glance + short merchant display
+    {
+        let mut aliases = AliasBook::default();
+        let _ = aliases.ensure_tw_defaults();
+        let _ = aliases.save();
+        // Capture today human output via subprocess would be heavy; probe via APIs + display helper.
+        let short = display_merchant_name("全家便利商店 臨江店");
+        record(
+            "merchant_display_short",
+            short == "全家" || !short.contains("臨江"),
+            &format!("display={short}"),
+        );
+        let (y, m) = current_year_month();
+        let stats_ok = open_db(&DbFlags {
+            db: db.clone(),
+            passphrase: None,
+        })
+        .ok()
+        .and_then(|(led, tmp)| {
+            let s = led.stats_by_currency_month(y, m).ok();
+            if let Some(t) = tmp {
+                let _ = std::fs::remove_file(t);
+            }
+            s
+        })
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
+        record(
+            "today_month_stats",
+            stats_ok,
+            "stats_by_currency_month non-empty after as-today add",
+        );
+    }
+
+    // P2: amount ranking — 價稅合計 / 合計 over 應稅
+    {
+        use rradar_core::extract::extract_l1_fields;
+        use rradar_core::{ExplainTrace, TextBlock};
+        let blocks = |lines: &[&str]| -> Vec<TextBlock> {
+            lines
+                .iter()
+                .map(|t| TextBlock {
+                    text: (*t).into(),
+                    confidence: 1.0,
+                })
+                .collect()
+        };
+        let mut ex = ExplainTrace::new("measure", "ocr");
+        let f = extract_l1_fields(
+            &blocks(&["店", "應稅銷售額 100", "營業稅 5", "價稅合計 105"]),
+            Iso4217::TWD,
+            &mut ex,
+        );
+        let ok = f
+            .total
+            .as_ref()
+            .map(|t| t.value.amount_minor == 10500)
+            .unwrap_or(false);
+        record(
+            "extract_prefer_price_tax_total",
+            ok,
+            &format!(
+                "minor={:?}",
+                f.total.as_ref().map(|t| t.value.amount_minor)
+            ),
+        );
+    }
+
+    // P2: ibon category longest-match
+    {
+        let eng = category_engine_with_packs();
+        let mut ex = rradar_core::ExplainTrace::new("measure", "ocr");
+        let cat = eng.categorize("7-ELEVEN ibon", "列印", &mut ex);
+        record(
+            "category_ibon_not_seven",
+            cat.value == "shopping",
+            &format!("category={}", cat.value),
+        );
+    }
+
+    // P4/P5: scoop + archive + second scoop empty
+    wipe_sqlite(&db);
+    if fam.is_file() && tea.is_file() {
+        let _ = std::fs::copy(&fam, inbox.join("familymart_89.txt"));
+        let _ = std::fs::copy(&tea, inbox.join("bubbletea_50lan_tw.txt"));
+        // call scoop quietly via argv
+        let scoop1 = cmd_scoop(&[
+            "--quiet".into(),
+            "--db".into(),
+            db.display().to_string(),
+        ]);
+        let top_left: usize = std::fs::read_dir(&inbox)
+            .map(|rd| rd.flatten().filter(|e| e.path().is_file()).count())
+            .unwrap_or(99);
+        let done_ok = inbox.join("done").is_dir();
+        let scoop2 = cmd_scoop(&[
+            "--quiet".into(),
+            "--db".into(),
+            db.display().to_string(),
+        ]);
+        record(
+            "scoop_archive_clears_inbox",
+            scoop1.is_ok() && top_left == 0 && done_ok,
+            &format!("scoop1={scoop1:?} top_files={top_left} done_dir={done_ok}"),
+        );
+        // Second scoop should be empty (n=0) — verify via inbox emptiness already;
+        // also ensure count stayed at 2 (no double insert of archived files).
+        let count = open_db(&DbFlags {
+            db: db.clone(),
+            passphrase: None,
+        })
+        .ok()
+        .and_then(|(led, tmp)| {
+            let c = led.count().ok();
+            if let Some(t) = tmp {
+                let _ = std::fs::remove_file(t);
+            }
+            c
+        });
+        record(
+            "scoop_second_is_noop",
+            scoop2.is_ok() && count == Some(2),
+            &format!("scoop2={scoop2:?} count={count:?}"),
+        );
+    } else {
+        record("scoop_archive_clears_inbox", false, "fixtures missing");
+        record("scoop_second_is_noop", false, "fixtures missing");
+    }
+
+    // P6/P7: month --csv
+    if fam.is_file() {
+        let md = home.join("month.md");
+        let csv = home.join("month.csv");
+        let r = cmd_month(&[
+            "--db".into(),
+            db.display().to_string(),
+            "-o".into(),
+            md.display().to_string(),
+            "--csv".into(),
+            csv.display().to_string(),
+            "--quiet".into(),
+        ]);
+        let csv_ok = csv.is_file()
+            && std::fs::read(&csv)
+                .map(|b| b.len() >= 3 && b[0..3] == [0xEF, 0xBB, 0xBF])
+                .unwrap_or(false);
+        record(
+            "month_csv_bom",
+            r.is_ok() && csv_ok && md.is_file(),
+            &format!("month={r:?} csv_bom={csv_ok} md={}", md.is_file()),
+        );
+    } else {
+        record("month_csv_bom", false, "fixture missing");
+    }
+
+    // P3: day closed loop (quiet)
+    {
+        let day_db = home.join("day-ledger.db");
+        let r = cmd_day(&[
+            "--fixtures".into(),
+            fixtures.display().to_string(),
+            "--db".into(),
+            day_db.display().to_string(),
+            "--quiet".into(),
+        ]);
+        record(
+            "day_closed_loop",
+            r.is_ok() && day_db.is_file(),
+            &format!("day={r:?}"),
+        );
+    }
+
+    // Optional: cht fixture extracts 699
+    if cht.is_file() {
+        let eng = engine_by_name("mock").map_err(|e| e.to_string())?;
+        let cats = category_engine_with_packs();
+        let draft = process_path(
+            &cht,
+            eng.as_ref(),
+            &cats,
+            ProcessOptions {
+                default_currency: Iso4217::TWD,
+                ..Default::default()
+            },
+        );
+        let ok = draft
+            .as_ref()
+            .map(|d| d.total.value.amount_minor == 69900 && d.category.value == "utilities")
+            .unwrap_or(false);
+        record(
+            "fixture_cht_bill",
+            ok,
+            &format!("{:?}", draft.map(|d| (d.total.value.amount_minor, d.category.value))),
+        );
+    } else {
+        record("fixture_cht_bill", false, "fixture missing");
+    }
+
+    if ibon.is_file() {
+        let eng = engine_by_name("mock").map_err(|e| e.to_string())?;
+        let cats = category_engine_with_packs();
+        let draft = process_path(
+            &ibon,
+            eng.as_ref(),
+            &cats,
+            ProcessOptions {
+                default_currency: Iso4217::TWD,
+                ..Default::default()
+            },
+        );
+        let ok = draft
+            .as_ref()
+            .map(|d| d.total.value.amount_minor == 3500 && d.category.value == "shopping")
+            .unwrap_or(false);
+        record(
+            "fixture_ibon_shopping",
+            ok,
+            &format!("{:?}", draft.map(|d| (d.total.value.amount_minor, d.category.value))),
+        );
+    } else {
+        record("fixture_ibon_shopping", false, "fixture missing");
+    }
+
+    // --- Close former blinds with probes ------------------------------------
+    let usd = fixtures.join("text/starbucks_usd.txt");
+    let qr_file = fixtures.join("qr/tw_einvoice_sample_01.payload.txt");
+
+    // watch --once --as-today
+    {
+        wipe_sqlite(&db);
+        let watch_dir = home.join("watch-inbox");
+        let _ = std::fs::create_dir_all(&watch_dir);
+        if fam.is_file() {
+            let _ = std::fs::copy(&fam, watch_dir.join("watch_fam.txt"));
+            let r = cmd_watch(&[
+                watch_dir.display().to_string(),
+                "--once".into(),
+                "--as-today".into(),
+                "--db".into(),
+                db.display().to_string(),
+            ]);
+            let (y, m) = current_year_month();
+            let n = open_db(&DbFlags {
+                db: db.clone(),
+                passphrase: None,
+            })
+            .ok()
+            .and_then(|(led, tmp)| {
+                let c = led.list_by_month(y, m, 10).ok().map(|r| r.len());
+                if let Some(t) = tmp {
+                    let _ = std::fs::remove_file(t);
+                }
+                c
+            })
+            .unwrap_or(0);
+            record(
+                "watch_once_as_today",
+                r.is_ok() && n >= 1,
+                &format!("watch={r:?} month_rows={n}"),
+            );
+        } else {
+            record("watch_once_as_today", false, "fixture missing");
+        }
+    }
+
+    // scoop --attach
+    {
+        wipe_sqlite(&db);
+        // clear inbox top-level
+        if let Ok(rd) = std::fs::read_dir(&inbox) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_file() {
+                    let _ = std::fs::remove_file(p);
+                }
+            }
+        }
+        if fam.is_file() {
+            let _ = std::fs::copy(&fam, inbox.join("attach_me.txt"));
+            let r = cmd_scoop(&[
+                "--quiet".into(),
+                "--attach".into(),
+                "--db".into(),
+                db.display().to_string(),
+            ]);
+            let attached = open_db(&DbFlags {
+                db: db.clone(),
+                passphrase: None,
+            })
+            .ok()
+            .and_then(|(led, tmp)| {
+                let rows = led.list_transactions(10, 0).ok();
+                if let Some(t) = tmp {
+                    let _ = std::fs::remove_file(t);
+                }
+                rows
+            })
+            .map(|rows| {
+                rows.first()
+                    .and_then(|t| t.attachment_path.as_ref())
+                    .map(|p| !p.is_empty())
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+            record(
+                "scoop_attach",
+                r.is_ok() && attached,
+                &format!("scoop={r:?} attached={attached}"),
+            );
+        } else {
+            record("scoop_attach", false, "fixture missing");
+        }
+    }
+
+    // budget OVER after large add
+    {
+        wipe_sqlite(&db);
+        let mut book = BudgetBook::default();
+        let _ = book.set_major("TWD", "50", None);
+        let _ = book.save();
+        if fam.is_file() {
+            let _ = cmd_process(
+                &[
+                    fam.display().to_string(),
+                    "--as-today".into(),
+                    "--quiet".into(),
+                    "--db".into(),
+                    db.display().to_string(),
+                ],
+                true,
+            );
+            let (y, m) = current_year_month();
+            let over = open_db(&DbFlags {
+                db: db.clone(),
+                passphrase: None,
+            })
+            .ok()
+            .and_then(|(led, tmp)| {
+                let st = budget_status_month(&led, &book, y, m).ok();
+                if let Some(t) = tmp {
+                    let _ = std::fs::remove_file(t);
+                }
+                st
+            })
+            .map(|st| st.iter().any(|s| s.over))
+            .unwrap_or(false);
+            record(
+                "budget_over_flag",
+                over,
+                "limit=50 spend≈89 should OVER",
+            );
+        } else {
+            record("budget_over_flag", false, "fixture missing");
+        }
+        // reset budgets for later probes
+        let mut clear = BudgetBook::default();
+        clear.clear_all();
+        let _ = clear.save();
+    }
+
+    // QR + --as-today overrides QR date into current month
+    {
+        wipe_sqlite(&db);
+        if fam.is_file() && qr_file.is_file() {
+            let r = cmd_process(
+                &[
+                    fam.display().to_string(),
+                    "--qr-file".into(),
+                    qr_file.display().to_string(),
+                    "--as-today".into(),
+                    "--quiet".into(),
+                    "--db".into(),
+                    db.display().to_string(),
+                ],
+                true,
+            );
+            let (y, m) = current_year_month();
+            let period = format!("{y:04}-{m:02}");
+            let ok = open_db(&DbFlags {
+                db: db.clone(),
+                passphrase: None,
+            })
+            .ok()
+            .and_then(|(led, tmp)| {
+                let rows = led.list_by_month(y, m, 5).ok();
+                if let Some(t) = tmp {
+                    let _ = std::fs::remove_file(t);
+                }
+                rows
+            })
+            .map(|rows| {
+                rows.first()
+                    .map(|t| t.transacted_at.starts_with(&period) && t.amount_minor == 8900)
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+            record(
+                "qr_as_today",
+                r.is_ok() && ok,
+                &format!("qr+as-today in {period}; {r:?}"),
+            );
+        } else {
+            record("qr_as_today", false, "fixture/qr missing");
+        }
+    }
+
+    // inbox done/ collision rename
+    {
+        wipe_sqlite(&db);
+        if let Ok(rd) = std::fs::read_dir(&inbox) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_file() {
+                    let _ = std::fs::remove_file(p);
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(inbox.join("done"));
+        if fam.is_file() {
+            let _ = std::fs::copy(&fam, inbox.join("same.txt"));
+            let _ = cmd_scoop(&[
+                "--quiet".into(),
+                "--db".into(),
+                db.display().to_string(),
+            ]);
+            // Second drop: same filename, different content → collision rename in done/
+            let _ = std::fs::write(
+                inbox.join("same.txt"),
+                "碰撞店\n合計 12\n2024-01-01\n",
+            );
+            let _ = cmd_scoop(&[
+                "--quiet".into(),
+                "--db".into(),
+                db.display().to_string(),
+            ]);
+            let day = utc_today_date();
+            let done = inbox.join("done").join(&day);
+            let has_same = done.join("same.txt").is_file();
+            let has_collision = done.join("same-2.txt").is_file();
+            record(
+                "inbox_done_collision",
+                has_same && has_collision,
+                &format!("same={has_same} same-2={has_collision} dir={}", done.display()),
+            );
+        } else {
+            record("inbox_done_collision", false, "fixture missing");
+        }
+    }
+
+    // undo after confirm
+    {
+        wipe_sqlite(&db);
+        if fam.is_file() {
+            let _ = cmd_process(
+                &[
+                    fam.display().to_string(),
+                    "--as-today".into(),
+                    "--quiet".into(),
+                    "--db".into(),
+                    db.display().to_string(),
+                ],
+                true,
+            );
+            let before = open_db(&DbFlags {
+                db: db.clone(),
+                passphrase: None,
+            })
+            .ok()
+            .and_then(|(led, tmp)| {
+                let c = led.count().ok();
+                if let Some(t) = tmp {
+                    let _ = std::fs::remove_file(t);
+                }
+                c
+            })
+            .unwrap_or(0);
+            let u = cmd_last_or_undo(
+                "undo",
+                &["--yes".into(), "--db".into(), db.display().to_string()],
+            );
+            let after = open_db(&DbFlags {
+                db: db.clone(),
+                passphrase: None,
+            })
+            .ok()
+            .and_then(|(led, tmp)| {
+                let c = led.count().ok();
+                if let Some(t) = tmp {
+                    let _ = std::fs::remove_file(t);
+                }
+                c
+            })
+            .unwrap_or(99);
+            record(
+                "undo_after_confirm",
+                u.is_ok() && before == 1 && after == 0,
+                &format!("undo={u:?} before={before} after={after}"),
+            );
+        } else {
+            record("undo_after_confirm", false, "fixture missing");
+        }
+    }
+
+    // multi-currency month CSV
+    {
+        wipe_sqlite(&db);
+        if fam.is_file() && usd.is_file() {
+            let _ = cmd_process(
+                &[
+                    fam.display().to_string(),
+                    "--as-today".into(),
+                    "--quiet".into(),
+                    "--db".into(),
+                    db.display().to_string(),
+                ],
+                true,
+            );
+            let _ = cmd_process(
+                &[
+                    usd.display().to_string(),
+                    "--as-today".into(),
+                    "--quiet".into(),
+                    "--db".into(),
+                    db.display().to_string(),
+                ],
+                true,
+            );
+            let csv = home.join("multi.csv");
+            let r = cmd_month(&[
+                "--db".into(),
+                db.display().to_string(),
+                "--csv".into(),
+                csv.display().to_string(),
+                "--quiet".into(),
+            ]);
+            let body = std::fs::read_to_string(&csv).unwrap_or_default();
+            let ok = r.is_ok()
+                && body.contains("TWD")
+                && body.contains("USD")
+                && (body.contains("8900") || body.contains("全家"))
+                && (body.contains("545") || body.contains("STARBUCKS"));
+            record(
+                "multi_currency_month_csv",
+                ok,
+                &format!("month={r:?} has_twd={} has_usd={}", body.contains("TWD"), body.contains("USD")),
+            );
+        } else {
+            record("multi_currency_month_csv", false, "fixtures missing");
+        }
+    }
+
+    // scoop --attach against .rrsealed (needs passphrase forwarded)
+    {
+        wipe_sqlite(&db);
+        let sealed = home.join("ledger.rrsealed");
+        let _ = std::fs::remove_file(&sealed);
+        // Ensure plain ledger exists then seal it.
+        if let Ok((led, tmp)) = open_db(&DbFlags {
+            db: db.clone(),
+            passphrase: None,
+        }) {
+            drop(led);
+            if let Some(t) = tmp {
+                let _ = std::fs::remove_file(t);
+            }
+        }
+        let seal_r = cmd_seal(&[
+            "--db".into(),
+            db.display().to_string(),
+            "--out".into(),
+            sealed.display().to_string(),
+            "-p".into(),
+            "measure-pass".into(),
+        ]);
+        if let Ok(rd) = std::fs::read_dir(&inbox) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_file() {
+                    let _ = std::fs::remove_file(p);
+                }
+            }
+        }
+        if seal_r.is_ok() && fam.is_file() && sealed.is_file() {
+            let _ = std::fs::copy(&fam, inbox.join("sealed_attach.txt"));
+            let scoop_r = cmd_scoop(&[
+                "--quiet".into(),
+                "--attach".into(),
+                "--db".into(),
+                sealed.display().to_string(),
+                "-p".into(),
+                "measure-pass".into(),
+            ]);
+            let attached = open_db(&DbFlags {
+                db: sealed.clone(),
+                passphrase: Some("measure-pass".into()),
+            })
+            .ok()
+            .and_then(|(led, tmp)| {
+                let rows = led.list_transactions(5, 0).ok();
+                if let Some(t) = tmp {
+                    let _ = std::fs::remove_file(t);
+                }
+                rows
+            })
+            .map(|rows| {
+                rows.first()
+                    .map(|t| {
+                        t.attachment_path
+                            .as_ref()
+                            .map(|p| !p.is_empty())
+                            .unwrap_or(false)
+                            && t.amount_minor == 8900
+                    })
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+            record(
+                "scoop_attach_sealed",
+                scoop_r.is_ok() && attached,
+                &format!("seal={seal_r:?} scoop={scoop_r:?} attached={attached}"),
+            );
+        } else {
+            record(
+                "scoop_attach_sealed",
+                false,
+                &format!("seal={seal_r:?} sealed_exists={}", sealed.is_file()),
+            );
+        }
+    }
+
+    // watch process restart picks up a new drop (fresh seen set)
+    {
+        wipe_sqlite(&db);
+        let watch_dir = home.join("watch-restart");
+        let _ = std::fs::create_dir_all(&watch_dir);
+        if let Ok(rd) = std::fs::read_dir(&watch_dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_file() {
+                    let _ = std::fs::remove_file(p);
+                }
+            }
+        }
+        let breakfast = fixtures.join("text/maymorning_breakfast_tw.txt");
+        if fam.is_file() && breakfast.is_file() {
+            let _ = std::fs::copy(&fam, watch_dir.join("a.txt"));
+            let r1 = cmd_watch(&[
+                watch_dir.display().to_string(),
+                "--once".into(),
+                "--as-today".into(),
+                "--db".into(),
+                db.display().to_string(),
+            ]);
+            let _ = std::fs::copy(&breakfast, watch_dir.join("b.txt"));
+            let r2 = cmd_watch(&[
+                watch_dir.display().to_string(),
+                "--once".into(),
+                "--as-today".into(),
+                "--db".into(),
+                db.display().to_string(),
+            ]);
+            let n = open_db(&DbFlags {
+                db: db.clone(),
+                passphrase: None,
+            })
+            .ok()
+            .and_then(|(led, tmp)| {
+                let c = led.count().ok();
+                if let Some(t) = tmp {
+                    let _ = std::fs::remove_file(t);
+                }
+                c
+            })
+            .unwrap_or(0);
+            record(
+                "watch_restart_picks_new",
+                r1.is_ok() && r2.is_ok() && n == 2,
+                &format!("r1={r1:?} r2={r2:?} count={n}"),
+            );
+        } else {
+            record("watch_restart_picks_new", false, "fixtures missing");
+        }
+    }
+
+    // two OS processes scooping the same inbox (distinct receipts)
+    {
+        wipe_sqlite(&db);
+        if let Ok(rd) = std::fs::read_dir(&inbox) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_file() {
+                    let _ = std::fs::remove_file(p);
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(inbox.join("done"));
+        let a = fixtures.join("text/maymorning_breakfast_tw.txt");
+        let b = fixtures.join("text/bubbletea_50lan_tw.txt");
+        if fam.is_file() && a.is_file() && b.is_file() {
+            let _ = std::fs::copy(&a, inbox.join("conc_a.txt"));
+            let _ = std::fs::copy(&b, inbox.join("conc_b.txt"));
+            let exe = env::current_exe().map_err(|e| e.to_string())?;
+            let spawn = |label: &str| {
+                std::process::Command::new(&exe)
+                    .args(["scoop", "--quiet", "--db"])
+                    .arg(&db)
+                    .env("RRADAR_HOME", &home)
+                    .env("RRADAR_INBOX", &inbox)
+                    .env("RRADAR_DB", &db)
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
+                    .map_err(|e| format!("spawn {label}: {e}"))
+            };
+            let mut c1 = spawn("scoop1")?;
+            let mut c2 = spawn("scoop2")?;
+            let s1 = c1.wait().map_err(|e| e.to_string())?;
+            let s2 = c2.wait().map_err(|e| e.to_string())?;
+            let n = open_db(&DbFlags {
+                db: db.clone(),
+                passphrase: None,
+            })
+            .ok()
+            .and_then(|(led, tmp)| {
+                let c = led.count().ok();
+                if let Some(t) = tmp {
+                    let _ = std::fs::remove_file(t);
+                }
+                c
+            })
+            .unwrap_or(0);
+            let leftover = std::fs::read_dir(&inbox)
+                .map(|rd| {
+                    rd.flatten()
+                        .filter(|e| e.path().is_file())
+                        .count()
+                })
+                .unwrap_or(99);
+            record(
+                "concurrent_scoop",
+                s1.success() && s2.success() && n == 2 && leftover == 0,
+                &format!(
+                    "exit1={} exit2={} count={n} leftover={leftover}",
+                    s1.code().unwrap_or(-1),
+                    s2.code().unwrap_or(-1)
+                ),
+            );
+        } else {
+            record("concurrent_scoop", false, "fixtures missing");
+        }
+    }
+
+    // onnx: only PASS when feature+models ready; otherwise remain BLIND below
+    let onnx_ready = rradar_ocr::onnx_feature_enabled()
+        && rradar_ocr::probe_onnx_readiness(rradar_ocr::default_models_dir()).ready_for_inference;
+    if onnx_ready {
+        let img = fixtures.join("images/familymart_photo.png");
+        if img.is_file() {
+            wipe_sqlite(&db);
+            let r = cmd_process(
+                &[
+                    img.display().to_string(),
+                    "--engine".into(),
+                    "onnx".into(),
+                    "--as-today".into(),
+                    "--quiet".into(),
+                    "--db".into(),
+                    db.display().to_string(),
+                ],
+                true,
+            );
+            let n = open_db(&DbFlags {
+                db: db.clone(),
+                passphrase: None,
+            })
+            .ok()
+            .and_then(|(led, tmp)| {
+                let c = led.count().ok();
+                if let Some(t) = tmp {
+                    let _ = std::fs::remove_file(t);
+                }
+                c
+            })
+            .unwrap_or(0);
+            record(
+                "onnx_real_photo",
+                r.is_ok() && n >= 1,
+                &format!("onnx process={r:?} count={n}"),
+            );
+        } else {
+            record("onnx_real_photo", false, "image fixture missing");
+        }
+    }
+
+    // --- Blind spots still unmeasured ---------------------------------------
+    let mut blinds: Vec<(&str, &str)> = Vec::new();
+    if !onnx_ready {
+        blinds.push((
+            "onnx_real_photo",
+            "true RapidOCR on phone photos — needs --features onnx + models",
+        ));
+    }
+    blinds.push((
+        "watch_daemon_crash",
+        "in-loop watch crash mid-process (restart-between-runs is measured)",
+    ));
+    blinds.push((
+        "mobile_frb",
+        "Flutter/FRB daily path out of CLI measure scope",
+    ));
+
+    if !quiet && !json {
+        println!();
+        println!("blind spots (UNMEASURED — do not trust yet):");
+        for (id, why) in &blinds {
+            println!("  BLIND | {id} | {why}");
+        }
+        println!();
+    }
+
+    // Restore env
+    match prev_home {
+        Some(v) => env::set_var("RRADAR_HOME", v),
+        None => env::remove_var("RRADAR_HOME"),
+    }
+    match prev_db {
+        Some(v) => env::set_var("RRADAR_DB", v),
+        None => env::remove_var("RRADAR_DB"),
+    }
+    match prev_inbox {
+        Some(v) => env::set_var("RRADAR_INBOX", v),
+        None => env::remove_var("RRADAR_INBOX"),
+    }
+
+    let pass = probes.iter().filter(|p| p["ok"].as_bool() == Some(true)).count();
+    let report = serde_json::json!({
+        "product_id": PRODUCT_ID,
+        "version": VERSION,
+        "sandbox": home.display().to_string(),
+        "probes": probes,
+        "pass": pass,
+        "fail": failed,
+        "blind_spots": blinds.iter().map(|(id, why)| serde_json::json!({"id": id, "why": why})).collect::<Vec<_>>(),
+        "trust_policy": "only PASS probes are trusted; BLIND = unknown",
+    });
+    let report_path = home.join("measure-report.json");
+    let _ = std::fs::write(
+        &report_path,
+        serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".into()),
+    );
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+    }
+
+    if failed == 0 {
+        println!(
+            "MEASURE_OK pass={pass} fail=0 blind={} report={}",
+            blinds.len(),
+            report_path.display()
+        );
+        Ok(())
+    } else {
+        println!(
+            "MEASURE_FAIL pass={pass} fail={failed} blind={} report={}",
+            blinds.len(),
+            report_path.display()
+        );
+        Err(format!(
+            "measure failed ({failed} probe(s)); do not trust failing behaviors yet"
+        ))
+    }
+}
+
 // --- shared flag helpers ---------------------------------------------------
 
 struct DbFlags {
@@ -532,11 +1609,18 @@ fn cmd_init(_args: &[String]) -> Result<(), String> {
     if !AppConfig::path().is_file() {
         cfg.save().map_err(|e| e.to_string())?;
     }
+    let mut aliases = AliasBook::load();
+    if aliases.ensure_tw_defaults() {
+        aliases.save().map_err(|e| e.to_string())?;
+        println!("aliases: seeded TW short names → {}", AliasBook::path().display());
+    }
     println!("initialized");
     println!("  home:   {}", dir.display());
     println!("  db:     {}", db.display());
     println!("  config: {}", AppConfig::path().display());
-    println!("next: rradar process <receipt.txt|image> --confirm");
+    println!("next: rradar add <receipt.txt|image> [--as-today]   # or: process … --confirm");
+    println!("      rradar today                     # month + budget glance");
+    println!("      rradar month                     # month-end close");
     Ok(())
 }
 
@@ -652,7 +1736,154 @@ fn cmd_doctor(_args: &[String]) -> Result<(), String> {
     );
     println!("  engines:  rradar engines [--json]");
     println!("  demo:     rradar demo   # isolated closed-loop from fixtures/");
+    println!("  day:      rradar day    # 30s Taiwan daily path (add --as-today → today)");
     println!("  showcase: docs/demo-showcase.md");
+    Ok(())
+}
+
+/// 30-second Taiwan daily path: curated fixtures → --as-today → today glance.
+/// Isolated day ledger by default (does not touch the personal ledger unless --db set).
+fn cmd_day(args: &[String]) -> Result<(), String> {
+    let mut fixtures_root: Option<PathBuf> = None;
+    let mut db_override: Option<PathBuf> = None;
+    let mut quiet = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--fixtures" => {
+                i += 1;
+                fixtures_root = Some(PathBuf::from(args.get(i).ok_or("--fixtures needs path")?));
+            }
+            "--db" => {
+                i += 1;
+                db_override = Some(PathBuf::from(args.get(i).ok_or("--db needs path")?));
+            }
+            "--quiet" | "-q" => quiet = true,
+            "--help" | "-h" => {
+                print_topic_help("day")?;
+                return Ok(());
+            }
+            other => {
+                return Err(format!(
+                    "unknown day flag `{other}` — try `rradar help day`"
+                ))
+            }
+        }
+        i += 1;
+    }
+
+    let fixtures = fixtures_root
+        .or_else(|| env::var_os("RRADAR_FIXTURES").map(PathBuf::from))
+        .unwrap_or_else(find_fixtures_dir);
+    if !fixtures.is_dir() {
+        return Err(format!(
+            "fixtures not found at {} — run from repo root or pass --fixtures PATH",
+            fixtures.display()
+        ));
+    }
+
+    let _ = ensure_data_dir().map_err(|e| e.to_string())?;
+    let mut aliases = AliasBook::load();
+    if aliases.ensure_tw_defaults() {
+        aliases.save().map_err(|e| e.to_string())?;
+    }
+    let mut budgets = BudgetBook::load();
+    if budgets.lines.is_empty() {
+        budgets.set_major("TWD", "30000", None)?;
+        budgets.save().map_err(|e| e.to_string())?;
+    }
+
+    let day_db = if let Some(p) = db_override {
+        p
+    } else if env::var_os("RRADAR_DB").is_some() {
+        default_db_path()
+    } else {
+        let home = data_dir().join("day");
+        let _ = std::fs::create_dir_all(&home);
+        home.join("ledger.db")
+    };
+    if let Some(parent) = day_db.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if day_db.is_file() {
+        let _ = std::fs::remove_file(&day_db);
+    }
+    let day_att = attachments_root_for_db(&day_db);
+    if day_att.is_dir() {
+        let _ = std::fs::remove_dir_all(&day_att);
+    }
+    let _ = rradar_core::Ledger::open(&day_db).map_err(|e| e.to_string())?;
+
+    let curated = [
+        "text/familymart_89.txt",
+        "text/maymorning_breakfast_tw.txt",
+        "text/bubbletea_50lan_tw.txt",
+        "text/mrt_taipei.txt",
+        "text/cht_bill_tw.txt",
+    ];
+    if !quiet {
+        println!("══════════════════════════════════════════════");
+        println!(" ReceiptRadar day — Taiwan daily path");
+        println!(" add --as-today → today  |  No cloud.");
+        println!("══════════════════════════════════════════════");
+        println!("fixtures | {}", fixtures.display());
+        println!("day db   | {}", day_db.display());
+        println!();
+    }
+
+    let mut confirmed = 0usize;
+    for rel in curated {
+        let path = fixtures.join(rel);
+        if !path.is_file() {
+            return Err(format!("missing day fixture: {}", path.display()));
+        }
+        if !quiet {
+            println!("── add --as-today | {rel} ──");
+        }
+        let mut proc_args = vec![
+            path.display().to_string(),
+            "--as-today".into(),
+            "--db".into(),
+            day_db.display().to_string(),
+        ];
+        if quiet {
+            proc_args.push("--quiet".into());
+        }
+        cmd_process(&proc_args, true)?;
+        confirmed += 1;
+    }
+
+    if !quiet {
+        println!();
+        println!("── today ──");
+        cmd_today(&[
+            "--db".into(),
+            day_db.display().to_string(),
+        ])?;
+    } else {
+        // Quiet path: still open ledger to prove rows exist without printing the table.
+        let (ledger, tmp) = open_db(&DbFlags {
+            db: day_db.clone(),
+            passphrase: None,
+        })?;
+        let n = ledger.count().map_err(|e| e.to_string())?;
+        if let Some(t) = tmp {
+            let _ = std::fs::remove_file(t);
+        }
+        if n == 0 {
+            return Err("day quiet: ledger empty after curated adds".into());
+        }
+    }
+
+    if quiet {
+        println!("DAY_OK n={confirmed}");
+    } else {
+        println!();
+        println!("DAY_OK — daily path finished ({confirmed} receipts, UTC today).");
+        println!("Next: rradar today --db {}", day_db.display());
+        println!("      rradar report --db {}", day_db.display());
+        println!("Record tip: powershell -File scripts/day.ps1");
+    }
     Ok(())
 }
 
@@ -1854,14 +3085,14 @@ fn percentile_ms(sorted: &[u128], p: u8) -> Option<u128> {
     Some(sorted[idx])
 }
 
-fn cmd_process(args: &[String]) -> Result<(), String> {
+fn cmd_process(args: &[String], default_confirm: bool) -> Result<(), String> {
     let mut paths: Vec<PathBuf> = Vec::new();
     let mut explain = false;
     let mut engine = "mock".to_string();
     let mut qr: Option<String> = None;
     let mut json = false;
     let mut currency = default_currency_from_env();
-    let mut confirm = false;
+    let mut confirm = default_confirm;
     let mut db: Option<PathBuf> = None;
     let mut passphrase: Option<String> = None;
     let mut force = false;
@@ -1873,6 +3104,7 @@ fn cmd_process(args: &[String]) -> Result<(), String> {
     let mut quiet = false;
     let mut attach = false;
     let mut tags: Option<String> = None;
+    let mut as_today = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -1880,6 +3112,9 @@ fn cmd_process(args: &[String]) -> Result<(), String> {
             "--explain" => explain = true,
             "--json" => json = true,
             "--confirm" | "-c" => confirm = true,
+            // Opt out of `add`'s default confirm (preview only).
+            "--preview" | "--no-confirm" => confirm = false,
+            "--as-today" => as_today = true,
             "--force" => force = true,
             "--quiet" | "-q" => quiet = true,
             "--attach" => attach = true,
@@ -1945,10 +3180,12 @@ fn cmd_process(args: &[String]) -> Result<(), String> {
     }
 
     if paths.is_empty() {
-        return Err(
+        return Err(if default_confirm {
+            "usage: rradar add <path> [more…] [--attach] [--tags a,b] [--explain] (writes ledger; --preview to parse only)".into()
+        } else {
             "usage: rradar process <path> [more paths…] [--confirm] [--explain] [--amount 89]"
-                .into(),
-        );
+                .into()
+        });
     }
 
     if engine.eq_ignore_ascii_case("auto") && !quiet {
@@ -1993,6 +3230,9 @@ fn cmd_process(args: &[String]) -> Result<(), String> {
             transacted_at: date.clone(),
             ..Default::default()
         };
+        if as_today && edits.transacted_at.is_none() {
+            edits.transacted_at = Some(utc_today_date());
+        }
         if let Some(ref a) = amount_major {
             let m = Money::from_major_str(a, currency).map_err(|e| e.to_string())?;
             edits.amount_minor = Some(m.amount_minor);
@@ -2074,6 +3314,9 @@ fn cmd_process(args: &[String]) -> Result<(), String> {
     }
 
     if let Some((ledger, tmp)) = ledger_open.take() {
+        if confirmed_n > 0 && !quiet && !json {
+            print_confirm_glance(&ledger);
+        }
         maybe_reseal(&flags, &ledger, tmp)?;
         if paths.len() > 1 {
             println!("batch | confirmed={confirmed_n} files={}", paths.len());
@@ -3418,6 +4661,216 @@ fn cmd_report(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Month-end glance: spend + budgets + categories + top merchants (+ optional markdown).
+fn cmd_month(args: &[String]) -> Result<(), String> {
+    let mut year: Option<i32> = None;
+    let mut month: Option<u32> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut csv_out: Option<PathBuf> = None;
+    let mut json = false;
+    let mut quiet = false;
+    let mut currency = default_currency_from_env().to_string();
+    let mut top_n: usize = 5;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--year" => {
+                i += 1;
+                year = Some(
+                    args.get(i)
+                        .ok_or("needs year")?
+                        .parse()
+                        .map_err(|_| "bad year")?,
+                );
+            }
+            "--month" => {
+                i += 1;
+                month = Some(
+                    args.get(i)
+                        .ok_or("needs month")?
+                        .parse()
+                        .map_err(|_| "bad month")?,
+                );
+            }
+            "-o" | "--output" => {
+                i += 1;
+                out = Some(PathBuf::from(args.get(i).ok_or("needs path")?));
+            }
+            "--csv" => {
+                i += 1;
+                csv_out = Some(PathBuf::from(args.get(i).ok_or("--csv needs path")?));
+            }
+            "--quiet" | "-q" => quiet = true,
+            "--json" => json = true,
+            "--currency" => {
+                i += 1;
+                currency = args.get(i).ok_or("needs currency")?.clone();
+            }
+            "--top" => {
+                i += 1;
+                top_n = args
+                    .get(i)
+                    .ok_or("needs N")?
+                    .parse()
+                    .map_err(|_| "bad --top")?;
+            }
+            "--help" | "-h" => {
+                print_topic_help("month")?;
+                return Ok(());
+            }
+            "--db" | "--passphrase" | "-p" => {
+                i += 1;
+            }
+            s if s.starts_with('-') => return Err(format!("unknown flag: {s}")),
+            _ => {}
+        }
+        i += 1;
+    }
+    let (y, m) = match (year, month) {
+        (Some(y), Some(m)) => (y, m),
+        (Some(y), None) => (y, current_year_month().1),
+        (None, Some(m)) => (current_year_month().0, m),
+        _ => current_year_month(),
+    };
+    let flags = extract_db_from_all(args)?;
+    let (ledger, tmp) = open_db(&flags)?;
+    let stats = ledger
+        .stats_by_currency_month(y, m)
+        .map_err(|e| e.to_string())?;
+    let book = BudgetBook::load();
+    let budgets = if book.lines.is_empty() {
+        Vec::new()
+    } else {
+        budget_status_month(&ledger, &book, y, m).map_err(|e| e.to_string())?
+    };
+    let ym = format!("{y:04}-{m:02}");
+    let cats = ledger
+        .stats_by_category(&currency, Some(&ym))
+        .map_err(|e| e.to_string())?;
+    let month_txs = ledger
+        .list_by_month(y, m, 100_000)
+        .map_err(|e| e.to_string())?;
+    let mut merchant_totals: std::collections::BTreeMap<String, (i64, i64)> =
+        std::collections::BTreeMap::new();
+    for tx in &month_txs {
+        if tx.currency != currency {
+            continue;
+        }
+        let e = merchant_totals
+            .entry(tx.merchant.clone())
+            .or_insert((0, 0));
+        e.0 += tx.amount_minor;
+        e.1 += 1;
+    }
+    let mut top: Vec<(String, i64, i64)> = merchant_totals
+        .into_iter()
+        .map(|(k, (minor, cnt))| (k, minor, cnt))
+        .collect();
+    top.sort_by_key(|b| std::cmp::Reverse(b.1));
+    top.truncate(top_n);
+
+    let md = monthly_markdown_with_budgets(&ledger, y, m, &book).map_err(|e| e.to_string())?;
+    if let Some(ref p) = out {
+        if let Some(parent) = p.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(p, md.as_bytes()).map_err(|e| e.to_string())?;
+    }
+    if let Some(ref p) = csv_out {
+        if let Some(parent) = p.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let csv = transactions_to_csv(&month_txs).map_err(|e| e.to_string())?;
+        std::fs::write(p, csv.as_bytes()).map_err(|e| e.to_string())?;
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "period": ym,
+                "stats": stats,
+                "budgets": budgets,
+                "categories": cats,
+                "top_merchants": top.iter().map(|(m, minor, cnt)| serde_json::json!({
+                    "merchant": m,
+                    "amount_minor": minor,
+                    "count": cnt,
+                    "currency": currency,
+                })).collect::<Vec<_>>(),
+                "markdown_path": out.as_ref().map(|p| p.display().to_string()),
+                "csv_path": csv_out.as_ref().map(|p| p.display().to_string()),
+                "csv_rows": month_txs.len(),
+            })
+        );
+    } else if quiet {
+        println!("MONTH_OK | {ym}");
+    } else {
+        println!("month | {ym}");
+        if stats.is_empty() {
+            println!("spend | (none this month)");
+        } else {
+            for s in &stats {
+                let iso = Iso4217::parse(&s.currency).unwrap_or(Iso4217::TWD);
+                let total = Money::new(s.total_minor, iso).display_major();
+                println!("spend | {} | total={total} | n={}", s.currency, s.count);
+            }
+        }
+        if budgets.is_empty() {
+            println!("budget | (none) — rradar budget set --currency TWD --monthly 30000");
+        } else {
+            for s in &budgets {
+                let iso = Iso4217::parse(&s.currency).unwrap_or(Iso4217::TWD);
+                let spent = Money::new(s.spent_minor, iso).display_major();
+                let limit_s = Money::new(s.limit_minor, iso).display_major();
+                let rem = Money::new(s.remaining_minor, iso).display_major();
+                let scope = s.category.as_deref().unwrap_or("overall");
+                let flag = if s.over { "OVER" } else { "ok" };
+                println!(
+                    "budget | {flag} | {} | {scope} | spent={spent} limit={limit_s} remaining={rem} ({:.0}%)",
+                    s.currency,
+                    s.ratio * 100.0
+                );
+            }
+        }
+        println!("categories | currency={currency}");
+        if cats.is_empty() {
+            println!("  (none)");
+        } else {
+            for c in &cats {
+                let iso = Iso4217::parse(&c.currency).unwrap_or(Iso4217::TWD);
+                let major = Money::new(c.total_minor, iso).display_major();
+                println!("  {} | {major} | n={}", c.category, c.count);
+            }
+        }
+        println!("top | currency={currency} | limit={top_n}");
+        if top.is_empty() {
+            println!("  (none)");
+        } else {
+            let iso = Iso4217::parse(&currency).unwrap_or(Iso4217::TWD);
+            for (i, (merch, minor, cnt)) in top.iter().enumerate() {
+                let major = Money::new(*minor, iso).display_major();
+                let name = display_merchant_name(merch);
+                println!("  {:>2} | {name} | {major} | n={cnt}", i + 1);
+            }
+        }
+        if let Some(p) = &out {
+            println!("wrote | md | {}", p.display());
+        }
+        if let Some(p) = &csv_out {
+            println!("wrote | csv | {} | rows={}", p.display(), month_txs.len());
+        }
+        if csv_out.is_none() {
+            println!("hint | rradar month --csv {ym}.csv");
+        }
+        println!("MONTH_OK | {ym}");
+    }
+    if let Some(t) = tmp {
+        let _ = std::fs::remove_file(t);
+    }
+    Ok(())
+}
+
 fn cmd_aliases(args: &[String]) -> Result<(), String> {
     if args.is_empty() {
         return Err(
@@ -3523,11 +4976,205 @@ fn cmd_inbox(args: &[String]) -> Result<(), String> {
     };
     println!("inbox | {}", path.display());
     if open {
-        println!("hint | drop receipt .txt/.jpg here then: rradar watch");
+        println!("hint | drop receipt .txt/.jpg here then: rradar scoop");
     } else if !path.is_dir() {
         println!("hint | run: rradar inbox --ensure");
+    } else {
+        println!("hint | rradar scoop   # process inbox → today (as-today)");
     }
     Ok(())
+}
+
+/// One-shot daily capture: ensure inbox → confirm --as-today → archive → today glance.
+fn cmd_scoop(args: &[String]) -> Result<(), String> {
+    let mut quiet = false;
+    let mut attach = false;
+    let mut keep_date = false;
+    let mut archive = true;
+    let mut engine = "mock".to_string();
+    let mut dir: Option<PathBuf> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--quiet" | "-q" => quiet = true,
+            "--attach" => attach = true,
+            "--keep-date" => keep_date = true,
+            "--no-archive" => archive = false,
+            "--archive" => archive = true,
+            "--engine" => {
+                i += 1;
+                engine = args.get(i).ok_or("--engine needs value")?.clone();
+            }
+            "--help" | "-h" => {
+                print_topic_help("scoop")?;
+                return Ok(());
+            }
+            "--db" | "--passphrase" | "-p" => {
+                i += 1;
+            }
+            s if !s.starts_with('-') => dir = Some(PathBuf::from(s)),
+            other => return Err(format!("unknown scoop flag `{other}` — try `rradar help scoop`")),
+        }
+        i += 1;
+    }
+
+    let inbox = if let Some(d) = dir {
+        if !d.is_dir() {
+            std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+        }
+        d
+    } else {
+        ensure_inbox_dir().map_err(|e| e.to_string())?
+    };
+
+    let flags = extract_db_from_all(args)?;
+    let _ = ensure_data_dir();
+    let mut aliases = AliasBook::load();
+    if aliases.ensure_tw_defaults() {
+        let _ = aliases.save();
+    }
+
+    // Top-level files only (skip done/ and other subdirs).
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&inbox)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .collect();
+    files.sort();
+
+    if !quiet {
+        println!("══════════════════════════════════════════════");
+        println!(" ReceiptRadar scoop — inbox → today");
+        println!(" No cloud. Drop files, one command.");
+        println!("══════════════════════════════════════════════");
+        println!("inbox   | {}", inbox.display());
+        println!("db      | {}", flags.db.display());
+        println!("files   | {}", files.len());
+        println!(
+            "archive | {}",
+            if archive {
+                "done/YYYY-MM-DD/ (default)"
+            } else {
+                "off (--no-archive)"
+            }
+        );
+        println!();
+    }
+
+    if files.is_empty() {
+        if quiet {
+            println!("SCOOP_OK n=0");
+        } else {
+            println!("(inbox empty)");
+            println!("hint | copy a receipt into {}", inbox.display());
+            println!("SCOOP_OK n=0");
+        }
+        return Ok(());
+    }
+
+    let mut confirmed = 0usize;
+    let mut archived = 0usize;
+    for path in &files {
+        if !quiet {
+            println!("── scoop | {} ──", path.display());
+        }
+        let mut proc_args = vec![path.display().to_string()];
+        if !keep_date {
+            proc_args.push("--as-today".into());
+        }
+        if attach {
+            proc_args.push("--attach".into());
+        }
+        proc_args.push("--engine".into());
+        proc_args.push(engine.clone());
+        if let Some(db) = flags.db.to_str() {
+            proc_args.push("--db".into());
+            proc_args.push(db.to_string());
+        }
+        if let Some(ref pass) = flags.passphrase {
+            proc_args.push("--passphrase".into());
+            proc_args.push(pass.clone());
+        }
+        if quiet {
+            proc_args.push("--quiet".into());
+        }
+        match cmd_process(&proc_args, true) {
+            Ok(()) => {
+                confirmed += 1;
+                if archive {
+                    match archive_inbox_file(&inbox, path) {
+                        Ok(dest) => {
+                            archived += 1;
+                            if !quiet {
+                                println!("archived | {}", dest.display());
+                            }
+                        }
+                        Err(e) => eprintln!("archive warn | {} | {e}", path.display()),
+                    }
+                }
+            }
+            Err(e) => eprintln!("scoop | error: {e}"),
+        }
+    }
+
+    if !quiet {
+        println!();
+        println!("── today ──");
+        cmd_today(&["--db".into(), flags.db.display().to_string()])?;
+        println!();
+        println!(
+            "SCOOP_OK — processed {confirmed}/{} inbox file(s); archived={archived}.",
+            files.len()
+        );
+        if archive {
+            println!(
+                "hint | processed files live under {}/done/{}/",
+                inbox.display(),
+                utc_today_date()
+            );
+        }
+    } else {
+        println!("SCOOP_OK n={confirmed} archived={archived}");
+    }
+    Ok(())
+}
+
+/// Move a scooped file to `{inbox}/done/YYYY-MM-DD/{filename}` (collision-safe).
+fn archive_inbox_file(inbox: &Path, src: &Path) -> Result<PathBuf, String> {
+    let day = utc_today_date();
+    let dest_dir = inbox.join("done").join(&day);
+    std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
+    let name = src
+        .file_name()
+        .ok_or_else(|| format!("no file name: {}", src.display()))?;
+    let mut dest = dest_dir.join(name);
+    if dest.exists() {
+        let stem = src
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("receipt");
+        let ext = src
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|e| format!(".{e}"))
+            .unwrap_or_default();
+        for n in 2..1000 {
+            let candidate = dest_dir.join(format!("{stem}-{n}{ext}"));
+            if !candidate.exists() {
+                dest = candidate;
+                break;
+            }
+        }
+    }
+    match std::fs::rename(src, &dest) {
+        Ok(()) => Ok(dest),
+        Err(_) => {
+            std::fs::copy(src, &dest).map_err(|e| e.to_string())?;
+            std::fs::remove_file(src).map_err(|e| e.to_string())?;
+            Ok(dest)
+        }
+    }
 }
 
 fn cmd_serve(args: &[String]) -> Result<(), String> {
@@ -3616,12 +5263,13 @@ fn cmd_api_smoke(args: &[String]) -> Result<(), String> {
 }
 
 fn cmd_watch(args: &[String]) -> Result<(), String> {
-    // rradar watch [dir] [--interval 2] [--once] [--attach]  — default dir = inbox
+    // rradar watch [dir] [--interval 2] [--once] [--attach] [--as-today|--keep-date]
     let mut dir: Option<PathBuf> = None;
     let mut interval_secs: u64 = 2;
     let mut confirm = true;
     let mut once = false;
     let mut attach = false;
+    let mut as_today = true; // daily path default
     let mut engine = "mock".to_string();
     let mut i = 0;
     while i < args.len() {
@@ -3637,9 +5285,15 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
             "--no-confirm" => confirm = false,
             "--once" => once = true,
             "--attach" => attach = true,
+            "--as-today" => as_today = true,
+            "--keep-date" => as_today = false,
             "--engine" => {
                 i += 1;
                 engine = args.get(i).ok_or("needs engine")?.clone();
+            }
+            // Parsed by extract_db_from_all; skip value here.
+            "--db" | "--passphrase" | "-p" => {
+                i += 1;
             }
             s if !s.starts_with('-') => dir = Some(PathBuf::from(s)),
             other => return Err(format!("unknown flag {other}")),
@@ -3668,11 +5322,13 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
             }
         }
         println!(
-            "watch | {} | interval={interval_secs}s | seeded {} existing files",
+            "watch | {} | interval={interval_secs}s | as_today={} | seeded {} existing files",
             dir.display(),
+            as_today,
             seen.len()
         );
     }
+    let mut processed = 0usize;
     loop {
         if let Ok(rd) = std::fs::read_dir(&dir) {
             let mut files: Vec<PathBuf> = rd
@@ -3697,6 +5353,9 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
                     if attach {
                         proc_args.push("--attach".into());
                     }
+                    if as_today {
+                        proc_args.push("--as-today".into());
+                    }
                 }
                 proc_args.push("--engine".into());
                 proc_args.push(engine.clone());
@@ -3707,14 +5366,23 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
                         proc_args.push(db.to_string());
                     }
                 }
+                if confirm {
+                    if let Some(ref pass) = flags.passphrase {
+                        proc_args.push("--passphrase".into());
+                        proc_args.push(pass.clone());
+                    }
+                }
                 println!(
-                    "watch | processing {}{}",
+                    "watch | processing {}{}{}",
                     path.display(),
-                    if attach { " (+attach)" } else { "" }
+                    if attach { " (+attach)" } else { "" },
+                    if as_today { " (+as-today)" } else { "" }
                 );
                 // call process logic by reconstructing argv
-                if let Err(e) = cmd_process(&proc_args) {
+                if let Err(e) = cmd_process(&proc_args, false) {
                     eprintln!("watch | error: {e}");
+                } else {
+                    processed += 1;
                 }
             }
         }
@@ -3722,6 +5390,9 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
             break;
         }
         std::thread::sleep(std::time::Duration::from_secs(interval_secs));
+    }
+    if once && processed > 0 {
+        println!("watch | done n={processed} — next: rradar today");
     }
     Ok(())
 }
@@ -4375,6 +6046,167 @@ fn print_draft(draft: &ReceiptDraft, explain: bool, json: bool) {
     }
 }
 
+/// Short post-confirm glance: spend + budget for the month of the last row.
+fn print_confirm_glance(ledger: &rradar_core::Ledger) {
+    let (y, m) = ledger
+        .last_transaction()
+        .ok()
+        .flatten()
+        .and_then(|tx| {
+            let d = tx.transacted_at.get(..7)?;
+            let (ys, ms) = d.split_once('-')?;
+            Some((ys.parse().ok()?, ms.parse().ok()?))
+        })
+        .unwrap_or_else(current_year_month);
+    match ledger.stats_by_currency_month(y, m) {
+        Ok(stats) if !stats.is_empty() => {
+            for s in stats {
+                let iso = Iso4217::parse(&s.currency).unwrap_or(Iso4217::TWD);
+                let total = Money::new(s.total_minor, iso).display_major();
+                println!(
+                    "month | {y:04}-{m:02} | {} | spent={total} | n={}",
+                    s.currency, s.count
+                );
+            }
+        }
+        Ok(_) => println!("month | {y:04}-{m:02} | (no spend yet)"),
+        Err(e) => eprintln!("month warn | {e}"),
+    }
+    let book = BudgetBook::load();
+    if book.lines.is_empty() {
+        println!("budget | (none) — rradar budget set --currency TWD --monthly 30000");
+    } else if let Ok(statuses) = budget_status_month(ledger, &book, y, m) {
+        for s in statuses {
+            let iso = Iso4217::parse(&s.currency).unwrap_or(Iso4217::TWD);
+            let rem = Money::new(s.remaining_minor, iso).display_major();
+            let scope = s.category.as_deref().unwrap_or("overall");
+            let flag = if s.over { "OVER" } else { "ok" };
+            println!(
+                "budget | {flag} | {} | {scope} | remaining={rem} ({:.0}%)",
+                s.currency,
+                s.ratio * 100.0
+            );
+        }
+    }
+    println!("hint | rradar today");
+}
+
+/// Daily home screen: this month + budgets + recent rows.
+fn cmd_today(args: &[String]) -> Result<(), String> {
+    let mut limit: usize = 8;
+    let mut year: Option<i32> = None;
+    let mut month: Option<u32> = None;
+    let json = args.iter().any(|a| a == "--json");
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--limit" => {
+                i += 1;
+                limit = args
+                    .get(i)
+                    .ok_or("--limit needs N")?
+                    .parse()
+                    .map_err(|_| "bad --limit")?;
+            }
+            "--year" => {
+                i += 1;
+                year = Some(
+                    args.get(i)
+                        .ok_or("needs year")?
+                        .parse()
+                        .map_err(|_| "bad year")?,
+                );
+            }
+            "--month" => {
+                i += 1;
+                month = Some(
+                    args.get(i)
+                        .ok_or("needs month")?
+                        .parse()
+                        .map_err(|_| "bad month")?,
+                );
+            }
+            "--json" => {}
+            "--db" | "--passphrase" | "-p" => {
+                // consumed by extract_db_from_all; skip value
+                i += 1;
+            }
+            s if s.starts_with('-') => return Err(format!("unknown flag: {s}")),
+            _ => {}
+        }
+        i += 1;
+    }
+    let (y, m) = match (year, month) {
+        (Some(y), Some(m)) => (y, m),
+        (Some(y), None) => (y, current_year_month().1),
+        (None, Some(m)) => (current_year_month().0, m),
+        _ => current_year_month(),
+    };
+    let flags = extract_db_from_all(args)?;
+    let (ledger, tmp) = open_db(&flags)?;
+    let stats = ledger
+        .stats_by_currency_month(y, m)
+        .map_err(|e| e.to_string())?;
+    let book = BudgetBook::load();
+    let budgets = if book.lines.is_empty() {
+        Vec::new()
+    } else {
+        budget_status_month(&ledger, &book, y, m).map_err(|e| e.to_string())?
+    };
+    let recent = ledger
+        .list_by_month(y, m, limit)
+        .map_err(|e| e.to_string())?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "period": format!("{y:04}-{m:02}"),
+                "stats": stats,
+                "budgets": budgets,
+                "recent": recent,
+            })
+        );
+    } else {
+        println!("today | {y:04}-{m:02}");
+        if stats.is_empty() {
+            println!("spend | (none this month)");
+        } else {
+            for s in &stats {
+                let iso = Iso4217::parse(&s.currency).unwrap_or(Iso4217::TWD);
+                let total = Money::new(s.total_minor, iso).display_major();
+                println!(
+                    "spend | {} | total={total} | n={}",
+                    s.currency, s.count
+                );
+            }
+        }
+        if budgets.is_empty() {
+            println!("budget | (none) — rradar budget set --currency TWD --monthly 30000");
+        } else {
+            for s in &budgets {
+                let iso = Iso4217::parse(&s.currency).unwrap_or(Iso4217::TWD);
+                let spent = Money::new(s.spent_minor, iso).display_major();
+                let limit_s = Money::new(s.limit_minor, iso).display_major();
+                let rem = Money::new(s.remaining_minor, iso).display_major();
+                let scope = s.category.as_deref().unwrap_or("overall");
+                let flag = if s.over { "OVER" } else { "ok" };
+                println!(
+                    "budget | {flag} | {} | {scope} | spent={spent} limit={limit_s} remaining={rem} ({:.0}%)",
+                    s.currency,
+                    s.ratio * 100.0
+                );
+            }
+        }
+        println!("recent | up to {limit}");
+        print_table(&recent);
+        println!("next | rradar add <receipt>   # or: list / report / budget status");
+    }
+    if let Some(t) = tmp {
+        let _ = std::fs::remove_file(t);
+    }
+    Ok(())
+}
+
 fn print_table(rows: &[Transaction]) {
     if rows.is_empty() {
         println!("(empty)");
@@ -4387,7 +6219,8 @@ fn print_table(rows: &[Transaction]) {
             t.amount_minor,
             Iso4217::parse(&t.currency).unwrap_or(Iso4217::TWD),
         );
-        let merch: String = t.merchant.chars().take(20).collect();
+        let display = display_merchant_name(&t.merchant);
+        let merch: String = display.chars().take(20).collect();
         let cat: String = t.category.chars().take(21).collect();
         let date = t.transacted_at.get(..10).unwrap_or(&t.transacted_at);
         let amt = format!("{:>10}", m.display_major());
@@ -4397,6 +6230,33 @@ fn print_table(rows: &[Transaction]) {
             id = t.id,
         );
     }
+}
+
+fn wipe_sqlite(db: &Path) {
+    let _ = std::fs::remove_file(db);
+    let wal = PathBuf::from(format!("{}-wal", db.display()));
+    let shm = PathBuf::from(format!("{}-shm", db.display()));
+    let _ = std::fs::remove_file(&wal);
+    let _ = std::fs::remove_file(&shm);
+}
+
+/// Prefer local aliases, then seed dictionary short display.
+fn display_merchant_name(raw: &str) -> String {
+    let mut book = AliasBook::load();
+    if book.ensure_tw_defaults() {
+        let _ = book.save();
+    }
+    let aliased = book.display_for(raw);
+    if aliased != raw {
+        return aliased;
+    }
+    category_engine_with_packs()
+        .suggest_display(raw)
+        .unwrap_or(aliased)
+}
+
+fn utc_today_date() -> String {
+    utc_now_iso().chars().take(10).collect()
 }
 
 fn default_currency_from_env() -> Iso4217 {
@@ -4414,9 +6274,12 @@ fn print_topic_help(topic: &str) -> Result<(), String> {
 process <files…> [options]
   Parse receipt text/image (mock OCR by default). Multiple files = batch.
   Images: decode + downscale longest edge to 1280 (retry 1600 on low conf).
-  --confirm, -c     write to ledger (default db)
-  --attach          with --confirm, copy source into {db_dir}/attachments/
-  --tags a,b,c      with --confirm, set free-form tags (schema v3)
+  Alias `add` confirms into the ledger by default (daily path).
+  --confirm, -c     write to ledger (default db); implied by `add`
+  --preview         with `add`, parse only (do not write)
+  --as-today        stamp transaction date to UTC today (daily path)
+  --attach          with confirm, copy source into {db_dir}/attachments/
+  --tags a,b,c      with confirm, set free-form tags (schema v3)
   --explain         show amount candidates / rules
   --json --quiet -q
   --engine mock|onnx|auto   (auto = onnx if feature+models ready)
@@ -4425,6 +6288,15 @@ process <files…> [options]
   --merchant --amount --category --date --notes
   --force           override hard dedupe
   --db PATH -p PASS",
+        "today" | "home" | "status" => "\
+today [--year Y --month M] [--limit N] [--json] [--db PATH]
+  Daily glance: this month spend + budgets + recent rows.
+  Aliases: home, status. Default period = current UTC month.",
+        "month" | "close" | "monthly" => "\
+month [--year Y --month M] [--currency TWD] [--top N] [-o report.md] [--csv out.csv] [--json] [--db PATH]
+  Month-end close: spend + budgets + categories + top merchants (month-scoped).
+  Aliases: close, monthly. -o writes markdown; --csv writes this month's ledger rows (Excel BOM).
+  Default period = current UTC month.",
         "ocr" => "\
 ocr <image…> [--engine mock|onnx|auto] [--max-edge 1280] [--json]
   Dump raw OCR lines (preprocess + engine) without L1 extract / ledger.
@@ -4510,13 +6382,34 @@ detach <id> [--delete-file]
 seal [--db ledger.db] -o file.rrsealed -p PASS
 unseal --in file.rrsealed -o ledger.db -p PASS
   Whole-file at-rest encryption (P2).",
+        "measure" | "probe" => "\
+measure [--fixtures DIR] [--json] [--quiet]
+  Isolated daily-path behavioral probes (Phases 1–7). Alias: probe.
+  PASS = measured & trusted for this run; FAIL = do not trust yet.
+  Always prints BLIND spots (explicitly unmeasured). Writes measure-report.json.
+  Does not touch the personal ledger (uses a temp sandbox).",
+        "day" => "\
+day [--fixtures DIR] [--db PATH] [--quiet]
+  30-second Taiwan daily path (recordable):
+  curated fixtures → add --as-today → today glance + soft budget.
+  Default day db: %APPDATA%/receiptradar/day/ledger.db (fresh each run).
+  Does not touch the default user ledger unless --db or RRADAR_DB is set.
+  Windows: powershell -File scripts/day.ps1",
+        "scoop" | "catch" => "\
+scoop [DIR] [--attach] [--keep-date] [--no-archive] [--engine mock|onnx|auto] [--quiet] [--db PATH]
+  One-shot daily capture: ensure/use inbox → confirm each file (--as-today) → today.
+  Alias: catch. Default dir = inbox (rradar inbox --ensure).
+  --keep-date keeps OCR receipt dates instead of stamping UTC today.
+  Successful files move to inbox/done/YYYY-MM-DD/ (use --no-archive to leave them).
+  After drop: copy receipts into inbox, then `rradar scoop`.",
         "demo" => "\
 demo [--fixtures DIR] [--db PATH] [--no-backup] [--quiet]
   Isolated closed-loop demo for recording / CI:
   text + mock_ocr + attach/tags → export → backup → report → local API smoke.
   Default demo db: %APPDATA%/receiptradar/demo/ledger.db (fresh each run).
   Does not touch the default user ledger unless --db or RRADAR_DB is set.
-  RRADAR_FIXTURES overrides fixtures root discovery.",
+  RRADAR_FIXTURES overrides fixtures root discovery.
+  Prefer `rradar day` for the short daily-path clip.",
         "serve" | "api-smoke" => "\
 serve [--bind 127.0.0.1:7432] [--db PATH]
   Loopback-only HTTP API (no cloud). See docs/local-api.md.
@@ -4556,24 +6449,31 @@ rradar — ReceiptRadar CLI (local-first ledger)
 {PRODUCT_ID} {VERSION}
 
 Quick start:
+  rradar day                 # 30s Taiwan daily path (recordable)
   rradar demo
   rradar init
-  rradar process fixtures/text/familymart_89.txt --confirm --explain
+  rradar add fixtures/text/familymart_89.txt --as-today --explain
+  rradar today
   rradar list
-  rradar stats
-  rradar export csv -o out.csv
+  rradar report
 
 Commands:
   init                 Create data dir + empty ledger + config
   config               Show/set local config.toml
   doctor               Environment / db check
+  today                Daily glance: month spend + budget + recent (alias: home, status)
+  month                Month-end close: spend + budget + categories + top (alias: close)
+  day                  30s Taiwan daily closed-loop (add --as-today → today)
+  scoop                Inbox → ledger today (alias: catch)
   engines              OCR engines readiness (mock|onnx|auto)
   licenses             THIRD_PARTY_NOTICES + Apache-2.0 policy (alias: notices)
   release-check        Pre-flight install/release gate (alias: self-check)
+  measure              Daily-path behavioral probes + blind spots (alias: probe)
   demo                 One-command closed-loop demo (fixtures → ledger)
   fixtures             List/verify demo fixture matrix
   path                 Print default home & db paths
-  process <files…>     Parse receipt(s) (alias: add); batch OK
+  process <files…>     Parse receipt(s); add --confirm to write
+  add <files…>         Daily path: parse + confirm (alias of process -c)
   ocr <image…>         Raw OCR line dump (debug photos)
   bench [dir]          A04 latency harness (p50/p95; --engine onnx)
   manual               Manual entry without OCR (alias: entry)
@@ -4594,10 +6494,12 @@ Commands:
   purge <id>|--all --yes Hard-delete + safe attachment GC [--json report]
   stats                Per-currency totals; --by-category for breakdown
   top                  Top merchants by spend (one currency)
+  month                Month-end glance + optional markdown (-o) (alias: close, monthly)
   report               Markdown monthly or annual report (-o file.md)
   aliases              Merchant display aliases (local; in backup)
   inbox [--ensure]     Show default drop folder (RRADAR_INBOX)
-  watch [dir]          Auto-process new files (default: inbox; --attach)
+  scoop [dir]          Process inbox into today (alias: catch; --attach|--keep-date)
+  watch [dir]          Auto-process new files (default: inbox; --as-today; --attach)
   serve [--bind 127.0.0.1:7432]  Local-only HTTP API
   api-smoke            Ephemeral loopback product API closed-loop
   recategorize         Re-run category rules (default: only `other`)
@@ -4614,7 +6516,9 @@ Commands:
   seal / unseal        Whole-file encryption (.rrsealed)
 
 process options:
-  --confirm, -c        Write to ledger (default db if --db omitted)
+  --confirm, -c        Write to ledger (default db if --db omitted); implied by `add`
+  --preview            With `add`, parse only (do not write)
+  --as-today           Stamp date to UTC today (so `rradar today` shows it)
   --attach             Copy source file into attachments/ on confirm
   --tags a,b           Free-form tags on confirm
   --explain            Show rules / amount candidates

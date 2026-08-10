@@ -43,27 +43,23 @@ impl CategoryEngine {
         explain: &mut ExplainTrace,
     ) -> Field<String> {
         let norm = normalize_key(merchant);
-        for m in &self.merchants {
-            if norm.contains(&m.key) || m.key.contains(&norm) && !norm.is_empty() {
-                explain.matched_keywords.push(m.key.clone());
-                explain.step(
-                    "category",
-                    format!("merchant dict hit {} -> {}", m.display, m.category),
-                );
-                return Field::new(m.category.clone(), 0.9, FieldSource::Rule);
-            }
+        if let Some(m) = Self::best_merchant_hit(&self.merchants, &norm) {
+            explain.matched_keywords.push(m.key.clone());
+            explain.step(
+                "category",
+                format!("merchant dict hit {} -> {}", m.display, m.category),
+            );
+            return Field::new(m.category.clone(), 0.9, FieldSource::Rule);
         }
-        // scan full text for merchant keys
+        // scan full text for merchant keys (longest key wins — ibon before 7-eleven)
         let blob = normalize_key(&format!("{merchant}\n{raw_text}"));
-        for m in &self.merchants {
-            if blob.contains(&m.key) {
-                explain.matched_keywords.push(m.key.clone());
-                explain.step(
-                    "category",
-                    format!("text dict hit {} -> {}", m.key, m.category),
-                );
-                return Field::new(m.category.clone(), 0.85, FieldSource::Rule);
-            }
+        if let Some(m) = Self::best_merchant_hit(&self.merchants, &blob) {
+            explain.matched_keywords.push(m.key.clone());
+            explain.step(
+                "category",
+                format!("text dict hit {} -> {}", m.key, m.category),
+            );
+            return Field::new(m.category.clone(), 0.85, FieldSource::Rule);
         }
         for (kw, cat) in &self.keywords {
             if blob.contains(kw) {
@@ -74,6 +70,38 @@ impl CategoryEngine {
         }
         explain.step("category", "fallback other");
         Field::new(CAT_OTHER.to_string(), 0.4, FieldSource::Rule)
+    }
+
+    /// Longest matching merchant key contained in `haystack` (normalized).
+    fn best_merchant_hit<'a>(
+        merchants: &'a [MerchantEntry],
+        haystack: &str,
+    ) -> Option<&'a MerchantEntry> {
+        let mut best: Option<&MerchantEntry> = None;
+        for m in merchants {
+            if m.key.is_empty() {
+                continue;
+            }
+            let hit = haystack.contains(&m.key)
+                || (m.key.contains(haystack) && !haystack.is_empty() && haystack.len() >= 2);
+            if !hit {
+                continue;
+            }
+            let better = match best {
+                None => true,
+                Some(b) => m.key.len() > b.key.len(),
+            };
+            if better {
+                best = Some(m);
+            }
+        }
+        best
+    }
+
+    /// Suggest a short display name from the seed dictionary (longest key win).
+    pub fn suggest_display(&self, merchant: &str) -> Option<String> {
+        let norm = normalize_key(merchant);
+        Self::best_merchant_hit(&self.merchants, &norm).map(|m| m.display.clone())
     }
 
     pub fn merchant_count(&self) -> usize {
@@ -107,6 +135,8 @@ fn entry(key: &str, display: &str, category: &str) -> MerchantEntry {
 fn seed_merchants() -> Vec<MerchantEntry> {
     let mut v = Vec::with_capacity(200);
     let conv = [
+        ("ibon", "ibon", CAT_SHOPPING),
+        ("7-elevenibon", "ibon", CAT_SHOPPING),
         ("7-eleven", "7-ELEVEN", CAT_GROCERY),
         ("7eleven", "7-ELEVEN", CAT_GROCERY),
         ("統一超商", "7-ELEVEN", CAT_GROCERY),
@@ -121,6 +151,8 @@ fn seed_merchants() -> Vec<MerchantEntry> {
         ("pxmart", "全聯福利中心", CAT_GROCERY),
         ("家樂福", "家樂福", CAT_GROCERY),
         ("carrefour", "家樂福", CAT_GROCERY),
+        ("愛買", "愛買", CAT_GROCERY),
+        ("楓康", "楓康超市", CAT_GROCERY),
         ("大潤發", "大潤發", CAT_GROCERY),
         ("rt-mart", "大潤發", CAT_GROCERY),
         ("costco", "好市多", CAT_GROCERY),
@@ -142,6 +174,9 @@ fn seed_merchants() -> Vec<MerchantEntry> {
         ("mcdonald", "McDonald's", CAT_FOOD),
         ("肯德基", "肯德基", CAT_FOOD),
         ("kfc", "KFC", CAT_FOOD),
+        ("麥味登", "麥味登", CAT_FOOD),
+        ("美而美", "美而美", CAT_FOOD),
+        ("早安美芝城", "早安美芝城", CAT_FOOD),
         ("摩斯漢堡", "MOS BURGER", CAT_FOOD),
         ("mos burger", "MOS BURGER", CAT_FOOD),
         ("星巴克", "STARBUCKS", CAT_FOOD),
@@ -425,6 +460,15 @@ mod tests {
         let mut ex = ExplainTrace::new("t", "ocr");
         let f = eng.categorize("全家便利商店 臨江店", "", &mut ex);
         assert_eq!(f.value, CAT_GROCERY);
+    }
+
+    #[test]
+    fn categorize_ibon_over_seven() {
+        let eng = CategoryEngine::with_seed();
+        let mut ex = ExplainTrace::new("t", "ocr");
+        let f = eng.categorize("7-ELEVEN ibon", "列印文件 合計 35", &mut ex);
+        assert_eq!(f.value, CAT_SHOPPING, "{ex:?}");
+        assert_eq!(eng.suggest_display("7-ELEVEN ibon").as_deref(), Some("ibon"));
     }
 
     #[test]

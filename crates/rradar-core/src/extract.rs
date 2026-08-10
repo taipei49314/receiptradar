@@ -110,9 +110,7 @@ pub fn extract_l1_fields(
             let currency = detect_currency(line, &raw, default_currency);
             if let Ok(money) = Money::from_major_str(num, currency) {
                 let mut score = 10;
-                if line_has_total_keyword(line) {
-                    score += 50;
-                }
+                score += total_keyword_bonus(line);
                 if line_has_subtotal_keyword(line) {
                     score += 20;
                 }
@@ -180,28 +178,43 @@ pub fn extract_l1_fields(
 }
 
 fn line_has_total_keyword(line: &str) -> bool {
+    total_keyword_bonus(line) > 0
+        || line_has_subtotal_keyword(line)
+        || {
+            let u = line.to_uppercase();
+            u.contains("TOTAL") || u.contains("AMOUNT DUE") || u.contains(" AMOUNT")
+        }
+}
+
+/// Rank bonus for TW / EN total wording. Prefer 價稅合計／合計 over 應稅／銷售額.
+fn total_keyword_bonus(line: &str) -> i32 {
     let u = line.to_uppercase();
-    // Chinese / shared
-    if [
-        "合計", "總計", "總額", "應收", "應付", "實付", "刷卡", "應稅", "付款",
-    ]
-    .iter()
-    .any(|k| line.contains(k))
-    {
-        return true;
+    if line.contains("價稅合計") || u.contains("GRAND TOTAL") || u.contains("BALANCE DUE") {
+        return 60;
     }
-    if u.contains("GRAND TOTAL") || u.contains("BALANCE DUE") {
-        return true;
+    if ["合計", "總計", "總額", "實付"].iter().any(|k| line.contains(k)) {
+        return 50;
     }
     // Avoid matching TOTAL inside SUBTOTAL
     if u.contains("SUBTOTAL") {
-        return false;
+        return 0;
     }
-    u.contains("TOTAL") || u.contains("AMOUNT DUE") || u.contains(" AMOUNT")
+    if u.contains("TOTAL") || u.contains("AMOUNT DUE") {
+        return 50;
+    }
+    // Payment hints — useful when no 合計, but lose to true totals.
+    if ["刷卡", "付款", "應收", "應付"].iter().any(|k| line.contains(k)) {
+        return 30;
+    }
+    // E-invoice taxable sales — do NOT beat 合計 / 價稅合計.
+    if line.contains("應稅") {
+        return 12;
+    }
+    0
 }
 
 fn line_has_subtotal_keyword(line: &str) -> bool {
-    ["小計", "銷售額", "未稅", "SUBTOTAL", "稅前"]
+    ["小計", "銷售額", "未稅", "SUBTOTAL", "稅前", "營業稅"]
         .iter()
         .any(|k| line.contains(k) || line.to_uppercase().contains(k))
 }
@@ -211,7 +224,8 @@ fn detect_currency(line: &str, raw: &str, default: Iso4217) -> Iso4217 {
     if u.contains("TWD") || u.contains("NT$") || u.contains("NTD") || line.contains('元') {
         return Iso4217::TWD;
     }
-    if u.contains("USD") {
+    // Bare `$` (not NT$) is treated as USD — TW receipts use NT$/元.
+    if u.contains("USD") || raw.contains('$') {
         return Iso4217::USD;
     }
     if u.contains("JPY") || u.contains('円') || line.contains('¥') {
@@ -304,6 +318,38 @@ mod tests {
     }
 
     #[test]
+    fn prefer_heji_over_yingshui() {
+        let mut ex = ExplainTrace::new("mock", "ocr");
+        let b = blocks(&[
+            "全家便利商店",
+            "應稅銷售額 89",
+            "營業稅 0",
+            "合計 89",
+        ]);
+        let f = extract_l1_fields(&b, Iso4217::TWD, &mut ex);
+        assert_eq!(f.total.unwrap().value.amount_minor, 8900);
+        // 合計 should outrank 應稅
+        assert!(
+            ex.amount_candidates[0].reason.contains("合計"),
+            "{:?}",
+            ex.amount_candidates
+        );
+    }
+
+    #[test]
+    fn prefer_price_tax_total() {
+        let mut ex = ExplainTrace::new("mock", "ocr");
+        let b = blocks(&[
+            "商店",
+            "應稅銷售額 100",
+            "營業稅 5",
+            "價稅合計 105",
+        ]);
+        let f = extract_l1_fields(&b, Iso4217::TWD, &mut ex);
+        assert_eq!(f.total.unwrap().value.amount_minor, 10500);
+    }
+
+    #[test]
     fn reject_ban_as_amount() {
         let mut ex = ExplainTrace::new("mock", "ocr");
         let b = blocks(&["統一編號 12345678", "總計 120"]);
@@ -333,6 +379,16 @@ mod tests {
         let b = blocks(&["CAFE", "SUBTOTAL 10.00", "TOTAL 11.00"]);
         let f = extract_l1_fields(&b, Iso4217::USD, &mut ex);
         assert_eq!(f.total.unwrap().value.amount_minor, 1100);
+    }
+
+    #[test]
+    fn bare_dollar_is_usd_even_if_default_twd() {
+        let mut ex = ExplainTrace::new("mock", "ocr");
+        let b = blocks(&["STARBUCKS COFFEE", "TOTAL $5.45", "2024-07-04"]);
+        let f = extract_l1_fields(&b, Iso4217::TWD, &mut ex);
+        let t = f.total.expect("total");
+        assert_eq!(t.value.amount_minor, 545);
+        assert_eq!(t.value.currency, Iso4217::USD);
     }
 
     #[test]

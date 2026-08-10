@@ -11,6 +11,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p rradar-cli -- doctor
 powershell -File scripts/smoke-cli.ps1
+cargo run -p rradar-cli -- measure --fixtures fixtures
 ```
 
 ## Non-goals

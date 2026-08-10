@@ -1,8 +1,46 @@
 # Demo showcase (recordable product path)
 
-One-command closed loop for GIF / launch video / CI. **No cloud. No account.**
+One-command closed loops for GIF / launch video / CI. **No cloud. No account.**
 
-## 60-second script
+## 30-second daily path (preferred clip)
+
+```bash
+# From repo root
+rradar day
+rradar day --quiet          # CI-friendly
+# Windows helper:
+#   powershell -File scripts/day.ps1
+```
+
+Shows: 全家 / 麥味登 / 50嵐 / 北捷 / 中華電信 → stamped **UTC today** → `today` glance with short merchant names + soft budget.
+
+Exit line: `DAY_OK n=5`
+
+## Inbox scoop (drop folder → today)
+
+```bash
+rradar inbox --ensure
+# copy receipts into the printed inbox path, then:
+rradar scoop              # confirms + archives to inbox/done/YYYY-MM-DD/
+rradar scoop --quiet
+rradar scoop --no-archive # leave files in place
+# Windows helper (copies sample fixtures into target/scoop/inbox):
+#   powershell -File scripts/scoop.ps1
+```
+
+Exit line: `SCOOP_OK n=… archived=…`
+
+## Month-end close
+
+```bash
+rradar month                              # current UTC month glance
+rradar close -o month.md --csv month.csv  # markdown + Excel CSV
+rradar month --year 2026 --month 8 --json
+```
+
+Exit line: `MONTH_OK | YYYY-MM`
+
+## 60-second full product demo
 
 ```bash
 # From repo root
@@ -57,6 +95,14 @@ rradar serve --bind 127.0.0.1:7432   # then GET /tags /budget /transactions?tag=
 ```
 
 ## Terminal GIF recipe
+
+### Daily path (recommended first clip)
+
+1. Clean shell, large font.
+2. `powershell -File scripts/day.ps1` (or `rradar day`).
+3. Crop to the `── add --as-today` beats and final `today` table + `DAY_OK`.
+
+### Full product demo
 
 1. Clean shell, large font, dark theme.
 2. `cd` to repo root; run `rradar demo` (not quiet).

@@ -30,25 +30,35 @@ rradar doctor
 ## One-click demo (recordable)
 
 ```bash
-# From repo root — isolated demo ledger, full closed loop
+# From repo root — 30s Taiwan daily path (preferred clip)
+rradar day
+rradar day --quiet          # CI-friendly
+powershell -File scripts/day.ps1
+
+# Full product closed loop
 rradar demo
-rradar demo --quiet          # CI-friendly
+rradar demo --quiet
 powershell -File scripts/demo.ps1
 ```
 
-Covers: text + mock_ocr + TW QR → **attach/tags** → tag filter + soft budget → list/stats/top → export → backup → monthly report → model pins → **local API smoke**.  
+`day` covers: curated TW receipts → **`--as-today`** → `today` glance (short names + soft budget).  
+`demo` covers: text + mock_ocr + TW QR → **attach/tags** → tag filter + soft budget → list/stats/top → export → backup → monthly report → model pins → **local API smoke**.  
 Showcase script: [demo-showcase.md](./demo-showcase.md).  
 Next steps: `inbox`/`watch --attach`, `serve` / `api-smoke` ([local-api.md](./local-api.md)).
 
 ## Daily workflow
 
 ```bash
-# 1) Parse a receipt (text fixture or image with mock/onnx)
+# 1) Confirm a receipt into the ledger (add = process --confirm)
+#    --as-today stamps UTC today so `rradar today` shows it immediately
+rradar add receipt.txt --explain --as-today
+# preview only:
 rradar process receipt.txt --explain
+# or: rradar add receipt.txt --preview
 
-# 2) Confirm into default ledger (override fields if needed)
-rradar process receipt.txt --confirm \
-  --merchant "全家臨江店" --amount 89 --category grocery_convenience
+# 2) One-screen glance (month + budget + recent; short merchant names)
+rradar today
+rradar today --json
 
 # 3) Browse / search
 rradar list

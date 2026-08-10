@@ -623,6 +623,384 @@ fn bench_mock_text_fixtures() {
 }
 
 #[test]
+fn measure_daily_path_ok() {
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    assert!(fixtures.is_dir(), "fixtures missing");
+    let out = bin()
+        .args([
+            "measure",
+            "--fixtures",
+            fixtures.to_str().unwrap(),
+            "--quiet",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "measure: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("MEASURE_OK"), "{stdout}");
+    assert!(stdout.contains("fail=0"), "{stdout}");
+}
+
+#[test]
+fn month_close_glance() {
+    let home = temp_case("month");
+    let db = home.join("ledger.db");
+    std::fs::create_dir_all(&home).unwrap();
+    let fx = fixtures();
+    let out = isolated_bin(&home, &db)
+        .args([
+            "add",
+            fx.to_str().unwrap(),
+            "--as-today",
+            "--quiet",
+            "--db",
+            db.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+
+    let md = home.join("month.md");
+    let csv = home.join("month.csv");
+    let out = isolated_bin(&home, &db)
+        .args([
+            "month",
+            "--db",
+            db.to_str().unwrap(),
+            "-o",
+            md.to_str().unwrap(),
+            "--csv",
+            csv.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "month: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(s.contains("MONTH_OK"), "{s}");
+    assert!(s.contains("spend |"), "{s}");
+    assert!(s.contains("categories |"), "{s}");
+    assert!(s.contains("top |"), "{s}");
+    assert!(s.contains("wrote | csv |"), "{s}");
+    assert!(md.is_file(), "markdown not written");
+    assert!(csv.is_file(), "csv not written");
+    let body = std::fs::read_to_string(&md).unwrap();
+    assert!(body.contains("ReceiptRadar report"), "{body}");
+    let csv_bytes = std::fs::read(&csv).unwrap();
+    assert_eq!(&csv_bytes[0..3], &[0xEF, 0xBB, 0xBF], "CSV should have UTF-8 BOM");
+    let csv_text = String::from_utf8_lossy(&csv_bytes);
+    assert!(csv_text.contains("全家") || csv_text.contains("8900"), "{csv_text}");
+
+    let json = isolated_bin(&home, &db)
+        .args([
+            "close",
+            "--json",
+            "--db",
+            db.to_str().unwrap(),
+            "--csv",
+            home.join("via-json.csv").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(json.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert!(v["period"].as_str().unwrap().len() == 7, "{v}");
+    assert!(!v["stats"].as_array().unwrap().is_empty(), "{v}");
+    assert_eq!(v["csv_rows"].as_u64(), Some(1), "{v}");
+    assert!(home.join("via-json.csv").is_file());
+}
+
+#[test]
+fn scoop_inbox_as_today() {
+    let home = temp_case("scoop");
+    let db = home.join("ledger.db");
+    let inbox = home.join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let fx = fixtures();
+    std::fs::copy(&fx, inbox.join("familymart_89.txt")).unwrap();
+    let tea = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/text/bubbletea_50lan_tw.txt");
+    std::fs::copy(&tea, inbox.join("bubbletea_50lan_tw.txt")).unwrap();
+
+    let mut cmd = isolated_bin(&home, &db);
+    cmd.env("RRADAR_INBOX", &inbox);
+    let out = cmd
+        .args(["scoop", "--quiet", "--db", db.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "scoop: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("SCOOP_OK"), "{stdout}");
+    assert!(stdout.contains("archived=2"), "{stdout}");
+
+    // Top-level inbox should be empty; files under done/
+    let top: Vec<_> = std::fs::read_dir(&inbox)
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().is_file())
+        .collect();
+    assert!(top.is_empty(), "expected archived out of inbox top-level");
+    let done_day = inbox.join("done");
+    assert!(done_day.is_dir(), "missing done/");
+
+    let today = isolated_bin(&home, &db)
+        .args(["today", "--json", "--db", db.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(today.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&today.stdout).unwrap();
+    let recent = v["recent"].as_array().unwrap();
+    assert_eq!(recent.len(), 2, "{v}");
+    let period = v["period"].as_str().unwrap();
+    for row in recent {
+        let date = row["transacted_at"].as_str().unwrap();
+        assert!(date.starts_with(period), "date {date} vs period {period}");
+    }
+
+    // Second scoop should see empty inbox
+    let mut cmd2 = isolated_bin(&home, &db);
+    cmd2.env("RRADAR_INBOX", &inbox);
+    let out2 = cmd2
+        .args(["scoop", "--quiet", "--db", db.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(out2.status.success());
+    let s2 = String::from_utf8_lossy(&out2.stdout);
+    assert!(s2.contains("SCOOP_OK n=0"), "{s2}");
+}
+
+#[test]
+fn day_closed_loop() {
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    assert!(fixtures.is_dir(), "fixtures missing");
+    let home = temp_case("day");
+    let db = home.join("ledger.db");
+    std::fs::create_dir_all(&home).unwrap();
+    let out = isolated_bin(&home, &db)
+        .args([
+            "day",
+            "--fixtures",
+            fixtures.to_str().unwrap(),
+            "--db",
+            db.to_str().unwrap(),
+            "--quiet",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "day: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("DAY_OK"), "{stdout}");
+    assert!(db.is_file(), "day ledger not created");
+
+    let today = isolated_bin(&home, &db)
+        .args(["today", "--json", "--db", db.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(today.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&today.stdout).unwrap();
+    let recent = v["recent"].as_array().unwrap();
+    assert_eq!(recent.len(), 5, "{v}");
+}
+
+#[test]
+fn add_defaults_to_confirm_and_today_glance() {
+    let home = temp_case("today");
+    let db = home.join("ledger.db");
+    std::fs::create_dir_all(&home).unwrap();
+    let fx = fixtures();
+
+    // `add` writes without --confirm
+    let out = isolated_bin(&home, &db)
+        .args(["add", fx.to_str().unwrap(), "--quiet", "--db", db.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "add: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("confirmed"), "{stdout}");
+
+    // `--preview` must NOT write a second row
+    let out = isolated_bin(&home, &db)
+        .args([
+            "add",
+            fx.to_str().unwrap(),
+            "--preview",
+            "--quiet",
+            "--db",
+            db.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "preview: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let preview = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !preview.contains("confirmed"),
+        "preview should not confirm: {preview}"
+    );
+
+    let count = isolated_bin(&home, &db)
+        .args(["count", "--db", db.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(count.status.success());
+    let count_s = String::from_utf8_lossy(&count.stdout);
+    assert!(
+        count_s.contains('1') || count_s.trim() == "1",
+        "expected 1 tx after preview: {count_s}"
+    );
+
+    // Fixture is dated 2024-05 — today for that month should list it
+    let out = isolated_bin(&home, &db)
+        .args([
+            "today",
+            "--year",
+            "2024",
+            "--month",
+            "5",
+            "--json",
+            "--db",
+            db.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "today: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["period"], "2024-05");
+    let recent = v["recent"].as_array().unwrap();
+    assert_eq!(recent.len(), 1, "{v}");
+    assert!(
+        recent[0]["merchant"].as_str().unwrap_or("").contains("全家")
+            || recent[0]["amount_minor"].as_i64() == Some(8900),
+        "{v}"
+    );
+
+    // Human today + aliases
+    for cmd in ["today", "home", "status"] {
+        let out = isolated_bin(&home, &db)
+            .args([cmd, "--year", "2024", "--month", "5", "--db", db.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{cmd}: {}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let s = String::from_utf8_lossy(&out.stdout);
+        assert!(s.contains("today | 2024-05"), "{cmd}: {s}");
+        assert!(s.contains("spend |"), "{cmd}: {s}");
+        assert!(s.contains("recent |"), "{cmd}: {s}");
+    }
+}
+
+#[test]
+fn add_as_today_lands_in_current_month_glance() {
+    let home = temp_case("as-today");
+    let db = home.join("ledger.db");
+    std::fs::create_dir_all(&home).unwrap();
+    let fx = fixtures();
+
+    let out = isolated_bin(&home, &db).args(["init"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "init: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let out = isolated_bin(&home, &db)
+        .args([
+            "add",
+            fx.to_str().unwrap(),
+            "--as-today",
+            "--quiet",
+            "--db",
+            db.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "add --as-today: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let out = isolated_bin(&home, &db)
+        .args(["today", "--json", "--db", db.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "today: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let recent = v["recent"].as_array().unwrap();
+    assert_eq!(recent.len(), 1, "{v}");
+    let period = v["period"].as_str().unwrap();
+    let date = recent[0]["transacted_at"].as_str().unwrap();
+    assert!(
+        date.starts_with(period),
+        "expected date {date} in period {period}"
+    );
+    // seed / alias short name path still keeps raw merchant in JSON
+    assert!(
+        recent[0]["merchant"]
+            .as_str()
+            .unwrap_or("")
+            .contains("全家"),
+        "{v}"
+    );
+
+    let human = isolated_bin(&home, &db)
+        .args(["today", "--db", db.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(human.status.success());
+    let s = String::from_utf8_lossy(&human.stdout);
+    assert!(s.contains("spend | TWD"), "{s}");
+    // Display should shorten branch name when aliases/seed apply
+    assert!(
+        s.contains("全家") && !s.contains("臨江店"),
+        "expected short merchant display: {s}"
+    );
+}
+
+#[test]
 fn release_check_ok() {
     let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
     assert!(fixtures.is_dir(), "fixtures missing");

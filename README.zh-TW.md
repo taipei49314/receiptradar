@@ -10,8 +10,10 @@
 
 ```bash
 cargo install --path crates/rradar-cli
+rradar day                 # 30 秒台灣日常閉環（建議錄影）
 rradar init
-rradar process fixtures/text/familymart_89.txt --confirm --explain
+rradar add fixtures/text/familymart_89.txt --as-today --explain
+rradar today
 rradar list
 rradar stats
 ```

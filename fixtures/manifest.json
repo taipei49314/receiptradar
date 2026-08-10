@@ -18,7 +18,10 @@
     { "path": "text/watsons_tw.txt", "class": "tw_health", "expect_total_minor": 39900, "expect_currency": "TWD", "demo": true },
     { "path": "text/cosmed_tw.txt", "class": "tw_health", "expect_total_minor": 25900, "expect_currency": "TWD", "demo": true },
     { "path": "text/cpc_gas_tw.txt", "class": "tw_fuel", "expect_total_minor": 65000, "expect_currency": "TWD", "demo": true },
-    { "path": "text/ibon_print_tw.txt", "class": "tw_service", "expect_total_minor": 3500, "expect_currency": "TWD", "demo": true }
+    { "path": "text/ibon_print_tw.txt", "class": "tw_service", "expect_total_minor": 3500, "expect_currency": "TWD", "demo": true },
+    { "path": "text/maymorning_breakfast_tw.txt", "class": "tw_breakfast", "expect_total_minor": 9500, "expect_currency": "TWD", "demo": true },
+    { "path": "text/bubbletea_50lan_tw.txt", "class": "tw_tea", "expect_total_minor": 5500, "expect_currency": "TWD", "demo": true },
+    { "path": "text/cht_bill_tw.txt", "class": "tw_utilities", "expect_total_minor": 69900, "expect_currency": "TWD", "demo": true }
   ],
   "mock_ocr_fixtures": [
     { "path": "mock_ocr/familymart_mock.bin", "class": "mock_image_path", "expect_total_minor": 8900, "expect_currency": "TWD", "demo": true },
