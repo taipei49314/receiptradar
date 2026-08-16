@@ -696,9 +696,16 @@ fn month_close_glance() {
     let body = std::fs::read_to_string(&md).unwrap();
     assert!(body.contains("ReceiptRadar report"), "{body}");
     let csv_bytes = std::fs::read(&csv).unwrap();
-    assert_eq!(&csv_bytes[0..3], &[0xEF, 0xBB, 0xBF], "CSV should have UTF-8 BOM");
+    assert_eq!(
+        &csv_bytes[0..3],
+        &[0xEF, 0xBB, 0xBF],
+        "CSV should have UTF-8 BOM"
+    );
     let csv_text = String::from_utf8_lossy(&csv_bytes);
-    assert!(csv_text.contains("全家") || csv_text.contains("8900"), "{csv_text}");
+    assert!(
+        csv_text.contains("全家") || csv_text.contains("8900"),
+        "{csv_text}"
+    );
 
     let json = isolated_bin(&home, &db)
         .args([
@@ -830,7 +837,13 @@ fn add_defaults_to_confirm_and_today_glance() {
 
     // `add` writes without --confirm
     let out = isolated_bin(&home, &db)
-        .args(["add", fx.to_str().unwrap(), "--quiet", "--db", db.to_str().unwrap()])
+        .args([
+            "add",
+            fx.to_str().unwrap(),
+            "--quiet",
+            "--db",
+            db.to_str().unwrap(),
+        ])
         .output()
         .unwrap();
     assert!(
@@ -902,7 +915,10 @@ fn add_defaults_to_confirm_and_today_glance() {
     let recent = v["recent"].as_array().unwrap();
     assert_eq!(recent.len(), 1, "{v}");
     assert!(
-        recent[0]["merchant"].as_str().unwrap_or("").contains("全家")
+        recent[0]["merchant"]
+            .as_str()
+            .unwrap_or("")
+            .contains("全家")
             || recent[0]["amount_minor"].as_i64() == Some(8900),
         "{v}"
     );
@@ -910,7 +926,15 @@ fn add_defaults_to_confirm_and_today_glance() {
     // Human today + aliases
     for cmd in ["today", "home", "status"] {
         let out = isolated_bin(&home, &db)
-            .args([cmd, "--year", "2024", "--month", "5", "--db", db.to_str().unwrap()])
+            .args([
+                cmd,
+                "--year",
+                "2024",
+                "--month",
+                "5",
+                "--db",
+                db.to_str().unwrap(),
+            ])
             .output()
             .unwrap();
         assert!(

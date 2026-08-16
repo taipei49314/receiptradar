@@ -468,7 +468,10 @@ mod tests {
         let mut ex = ExplainTrace::new("t", "ocr");
         let f = eng.categorize("7-ELEVEN ibon", "列印文件 合計 35", &mut ex);
         assert_eq!(f.value, CAT_SHOPPING, "{ex:?}");
-        assert_eq!(eng.suggest_display("7-ELEVEN ibon").as_deref(), Some("ibon"));
+        assert_eq!(
+            eng.suggest_display("7-ELEVEN ibon").as_deref(),
+            Some("ibon")
+        );
     }
 
     #[test]

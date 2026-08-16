@@ -746,10 +746,7 @@ fn cmd_measure(args: &[String]) -> Result<(), String> {
         record(
             "extract_prefer_price_tax_total",
             ok,
-            &format!(
-                "minor={:?}",
-                f.total.as_ref().map(|t| t.value.amount_minor)
-            ),
+            &format!("minor={:?}", f.total.as_ref().map(|t| t.value.amount_minor)),
         );
     }
 
@@ -771,20 +768,12 @@ fn cmd_measure(args: &[String]) -> Result<(), String> {
         let _ = std::fs::copy(&fam, inbox.join("familymart_89.txt"));
         let _ = std::fs::copy(&tea, inbox.join("bubbletea_50lan_tw.txt"));
         // call scoop quietly via argv
-        let scoop1 = cmd_scoop(&[
-            "--quiet".into(),
-            "--db".into(),
-            db.display().to_string(),
-        ]);
+        let scoop1 = cmd_scoop(&["--quiet".into(), "--db".into(), db.display().to_string()]);
         let top_left: usize = std::fs::read_dir(&inbox)
             .map(|rd| rd.flatten().filter(|e| e.path().is_file()).count())
             .unwrap_or(99);
         let done_ok = inbox.join("done").is_dir();
-        let scoop2 = cmd_scoop(&[
-            "--quiet".into(),
-            "--db".into(),
-            db.display().to_string(),
-        ]);
+        let scoop2 = cmd_scoop(&["--quiet".into(), "--db".into(), db.display().to_string()]);
         record(
             "scoop_archive_clears_inbox",
             scoop1.is_ok() && top_left == 0 && done_ok,
@@ -877,7 +866,10 @@ fn cmd_measure(args: &[String]) -> Result<(), String> {
         record(
             "fixture_cht_bill",
             ok,
-            &format!("{:?}", draft.map(|d| (d.total.value.amount_minor, d.category.value))),
+            &format!(
+                "{:?}",
+                draft.map(|d| (d.total.value.amount_minor, d.category.value))
+            ),
         );
     } else {
         record("fixture_cht_bill", false, "fixture missing");
@@ -902,7 +894,10 @@ fn cmd_measure(args: &[String]) -> Result<(), String> {
         record(
             "fixture_ibon_shopping",
             ok,
-            &format!("{:?}", draft.map(|d| (d.total.value.amount_minor, d.category.value))),
+            &format!(
+                "{:?}",
+                draft.map(|d| (d.total.value.amount_minor, d.category.value))
+            ),
         );
     } else {
         record("fixture_ibon_shopping", false, "fixture missing");
@@ -1031,11 +1026,7 @@ fn cmd_measure(args: &[String]) -> Result<(), String> {
             })
             .map(|st| st.iter().any(|s| s.over))
             .unwrap_or(false);
-            record(
-                "budget_over_flag",
-                over,
-                "limit=50 spend≈89 should OVER",
-            );
+            record("budget_over_flag", over, "limit=50 spend≈89 should OVER");
         } else {
             record("budget_over_flag", false, "fixture missing");
         }
@@ -1105,21 +1096,10 @@ fn cmd_measure(args: &[String]) -> Result<(), String> {
         let _ = std::fs::remove_dir_all(inbox.join("done"));
         if fam.is_file() {
             let _ = std::fs::copy(&fam, inbox.join("same.txt"));
-            let _ = cmd_scoop(&[
-                "--quiet".into(),
-                "--db".into(),
-                db.display().to_string(),
-            ]);
+            let _ = cmd_scoop(&["--quiet".into(), "--db".into(), db.display().to_string()]);
             // Second drop: same filename, different content → collision rename in done/
-            let _ = std::fs::write(
-                inbox.join("same.txt"),
-                "碰撞店\n合計 12\n2024-01-01\n",
-            );
-            let _ = cmd_scoop(&[
-                "--quiet".into(),
-                "--db".into(),
-                db.display().to_string(),
-            ]);
+            let _ = std::fs::write(inbox.join("same.txt"), "碰撞店\n合計 12\n2024-01-01\n");
+            let _ = cmd_scoop(&["--quiet".into(), "--db".into(), db.display().to_string()]);
             let day = utc_today_date();
             let done = inbox.join("done").join(&day);
             let has_same = done.join("same.txt").is_file();
@@ -1127,7 +1107,10 @@ fn cmd_measure(args: &[String]) -> Result<(), String> {
             record(
                 "inbox_done_collision",
                 has_same && has_collision,
-                &format!("same={has_same} same-2={has_collision} dir={}", done.display()),
+                &format!(
+                    "same={has_same} same-2={has_collision} dir={}",
+                    done.display()
+                ),
             );
         } else {
             record("inbox_done_collision", false, "fixture missing");
@@ -1229,7 +1212,11 @@ fn cmd_measure(args: &[String]) -> Result<(), String> {
             record(
                 "multi_currency_month_csv",
                 ok,
-                &format!("month={r:?} has_twd={} has_usd={}", body.contains("TWD"), body.contains("USD")),
+                &format!(
+                    "month={r:?} has_twd={} has_usd={}",
+                    body.contains("TWD"),
+                    body.contains("USD")
+                ),
             );
         } else {
             record("multi_currency_month_csv", false, "fixtures missing");
@@ -1417,11 +1404,7 @@ fn cmd_measure(args: &[String]) -> Result<(), String> {
             })
             .unwrap_or(0);
             let leftover = std::fs::read_dir(&inbox)
-                .map(|rd| {
-                    rd.flatten()
-                        .filter(|e| e.path().is_file())
-                        .count()
-                })
+                .map(|rd| rd.flatten().filter(|e| e.path().is_file()).count())
                 .unwrap_or(99);
             record(
                 "concurrent_scoop",
@@ -1519,7 +1502,10 @@ fn cmd_measure(args: &[String]) -> Result<(), String> {
         None => env::remove_var("RRADAR_INBOX"),
     }
 
-    let pass = probes.iter().filter(|p| p["ok"].as_bool() == Some(true)).count();
+    let pass = probes
+        .iter()
+        .filter(|p| p["ok"].as_bool() == Some(true))
+        .count();
     let report = serde_json::json!({
         "product_id": PRODUCT_ID,
         "version": VERSION,
@@ -1537,7 +1523,10 @@ fn cmd_measure(args: &[String]) -> Result<(), String> {
     );
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap_or_default()
+        );
     }
 
     if failed == 0 {
@@ -1612,7 +1601,10 @@ fn cmd_init(_args: &[String]) -> Result<(), String> {
     let mut aliases = AliasBook::load();
     if aliases.ensure_tw_defaults() {
         aliases.save().map_err(|e| e.to_string())?;
-        println!("aliases: seeded TW short names → {}", AliasBook::path().display());
+        println!(
+            "aliases: seeded TW short names → {}",
+            AliasBook::path().display()
+        );
     }
     println!("initialized");
     println!("  home:   {}", dir.display());
@@ -1856,10 +1848,7 @@ fn cmd_day(args: &[String]) -> Result<(), String> {
     if !quiet {
         println!();
         println!("── today ──");
-        cmd_today(&[
-            "--db".into(),
-            day_db.display().to_string(),
-        ])?;
+        cmd_today(&["--db".into(), day_db.display().to_string()])?;
     } else {
         // Quiet path: still open ledger to prove rows exist without printing the table.
         let (ledger, tmp) = open_db(&DbFlags {
@@ -4756,9 +4745,7 @@ fn cmd_month(args: &[String]) -> Result<(), String> {
         if tx.currency != currency {
             continue;
         }
-        let e = merchant_totals
-            .entry(tx.merchant.clone())
-            .or_insert((0, 0));
+        let e = merchant_totals.entry(tx.merchant.clone()).or_insert((0, 0));
         e.0 += tx.amount_minor;
         e.1 += 1;
     }
@@ -5013,7 +5000,11 @@ fn cmd_scoop(args: &[String]) -> Result<(), String> {
                 i += 1;
             }
             s if !s.starts_with('-') => dir = Some(PathBuf::from(s)),
-            other => return Err(format!("unknown scoop flag `{other}` — try `rradar help scoop`")),
+            other => {
+                return Err(format!(
+                    "unknown scoop flag `{other}` — try `rradar help scoop`"
+                ))
+            }
         }
         i += 1;
     }
@@ -6174,10 +6165,7 @@ fn cmd_today(args: &[String]) -> Result<(), String> {
             for s in &stats {
                 let iso = Iso4217::parse(&s.currency).unwrap_or(Iso4217::TWD);
                 let total = Money::new(s.total_minor, iso).display_major();
-                println!(
-                    "spend | {} | total={total} | n={}",
-                    s.currency, s.count
-                );
+                println!("spend | {} | total={total} | n={}", s.currency, s.count);
             }
         }
         if budgets.is_empty() {

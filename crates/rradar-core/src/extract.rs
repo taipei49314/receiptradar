@@ -178,12 +178,10 @@ pub fn extract_l1_fields(
 }
 
 fn line_has_total_keyword(line: &str) -> bool {
-    total_keyword_bonus(line) > 0
-        || line_has_subtotal_keyword(line)
-        || {
-            let u = line.to_uppercase();
-            u.contains("TOTAL") || u.contains("AMOUNT DUE") || u.contains(" AMOUNT")
-        }
+    total_keyword_bonus(line) > 0 || line_has_subtotal_keyword(line) || {
+        let u = line.to_uppercase();
+        u.contains("TOTAL") || u.contains("AMOUNT DUE") || u.contains(" AMOUNT")
+    }
 }
 
 /// Rank bonus for TW / EN total wording. Prefer 價稅合計／合計 over 應稅／銷售額.
@@ -192,7 +190,10 @@ fn total_keyword_bonus(line: &str) -> i32 {
     if line.contains("價稅合計") || u.contains("GRAND TOTAL") || u.contains("BALANCE DUE") {
         return 60;
     }
-    if ["合計", "總計", "總額", "實付"].iter().any(|k| line.contains(k)) {
+    if ["合計", "總計", "總額", "實付"]
+        .iter()
+        .any(|k| line.contains(k))
+    {
         return 50;
     }
     // Avoid matching TOTAL inside SUBTOTAL
@@ -203,7 +204,10 @@ fn total_keyword_bonus(line: &str) -> i32 {
         return 50;
     }
     // Payment hints — useful when no 合計, but lose to true totals.
-    if ["刷卡", "付款", "應收", "應付"].iter().any(|k| line.contains(k)) {
+    if ["刷卡", "付款", "應收", "應付"]
+        .iter()
+        .any(|k| line.contains(k))
+    {
         return 30;
     }
     // E-invoice taxable sales — do NOT beat 合計 / 價稅合計.
@@ -320,12 +324,7 @@ mod tests {
     #[test]
     fn prefer_heji_over_yingshui() {
         let mut ex = ExplainTrace::new("mock", "ocr");
-        let b = blocks(&[
-            "全家便利商店",
-            "應稅銷售額 89",
-            "營業稅 0",
-            "合計 89",
-        ]);
+        let b = blocks(&["全家便利商店", "應稅銷售額 89", "營業稅 0", "合計 89"]);
         let f = extract_l1_fields(&b, Iso4217::TWD, &mut ex);
         assert_eq!(f.total.unwrap().value.amount_minor, 8900);
         // 合計 should outrank 應稅
@@ -339,12 +338,7 @@ mod tests {
     #[test]
     fn prefer_price_tax_total() {
         let mut ex = ExplainTrace::new("mock", "ocr");
-        let b = blocks(&[
-            "商店",
-            "應稅銷售額 100",
-            "營業稅 5",
-            "價稅合計 105",
-        ]);
+        let b = blocks(&["商店", "應稅銷售額 100", "營業稅 5", "價稅合計 105"]);
         let f = extract_l1_fields(&b, Iso4217::TWD, &mut ex);
         assert_eq!(f.total.unwrap().value.amount_minor, 10500);
     }
