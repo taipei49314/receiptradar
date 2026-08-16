@@ -5066,11 +5066,39 @@ fn cmd_scoop(args: &[String]) -> Result<(), String> {
 
     let mut confirmed = 0usize;
     let mut archived = 0usize;
+    // Claim directory: concurrent scoops race on the same inbox listing, and the
+    // ledger dedupe is an advisory SELECT-then-INSERT, so two processes handling
+    // the same file can both insert it. Renaming into `.scooping/` first is
+    // atomic on one filesystem: exactly one scoop wins each file, the loser
+    // skips it. The claimed file keeps its original name so `add` provenance
+    // and the done/-archive name stay stable.
+    let claim_dir = inbox.join(".scooping");
+    let _ = std::fs::create_dir_all(&claim_dir);
     for path in &files {
+        let claim_target = match path.file_name() {
+            Some(name) => claim_dir.join(name),
+            None => continue,
+        };
+        let use_path = match std::fs::rename(path, &claim_target) {
+            Ok(()) => claim_target.clone(),
+            Err(_) if !path.exists() => {
+                // Another scoop claimed (or archived) it between listing and now.
+                if !quiet {
+                    println!(
+                        "── scoop | {} ── claimed by another scoop; skipping",
+                        path.display()
+                    );
+                }
+                continue;
+            }
+            // Stale same-named claim is blocking the rename (e.g. a crashed
+            // run); fall back to processing in place so the file is not stuck.
+            Err(_) => path.clone(),
+        };
         if !quiet {
             println!("── scoop | {} ──", path.display());
         }
-        let mut proc_args = vec![path.display().to_string()];
+        let mut proc_args = vec![use_path.display().to_string()];
         if !keep_date {
             proc_args.push("--as-today".into());
         }
@@ -5094,20 +5122,31 @@ fn cmd_scoop(args: &[String]) -> Result<(), String> {
             Ok(()) => {
                 confirmed += 1;
                 if archive {
-                    match archive_inbox_file(&inbox, path) {
+                    match archive_inbox_file(&inbox, &use_path) {
                         Ok(dest) => {
                             archived += 1;
                             if !quiet {
                                 println!("archived | {}", dest.display());
                             }
                         }
-                        Err(e) => eprintln!("archive warn | {} | {e}", path.display()),
+                        Err(e) => eprintln!("archive warn | {} | {e}", use_path.display()),
                     }
+                } else if use_path != *path {
+                    // --no-archive keeps files in the inbox; release the claim.
+                    let _ = std::fs::rename(&use_path, path);
                 }
             }
-            Err(e) => eprintln!("scoop | error: {e}"),
+            Err(e) => {
+                eprintln!("scoop | error: {e}");
+                if use_path != *path {
+                    // Return the file to the inbox so a later scoop can retry.
+                    let _ = std::fs::rename(&use_path, path);
+                }
+            }
         }
     }
+    // Best-effort: only removes the claim dir when every claim was resolved.
+    let _ = std::fs::remove_dir(&claim_dir);
 
     if !quiet {
         println!();
