@@ -37,6 +37,12 @@ jobs:
       - name: test
         run: cargo test --workspace --locked
 
+      - name: Dump measure report on failure
+        if: failure()
+        shell: bash
+        run: |
+          find "${TMPDIR:-/tmp}" -maxdepth 2 -name "measure-report.json" -print -exec cat {} ';' 2>/dev/null || true
+
       - name: ffi surface
         run: cargo test -p rradar-ffi --locked
 
