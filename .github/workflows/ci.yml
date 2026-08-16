@@ -37,6 +37,18 @@ jobs:
       - name: test
         run: cargo test --workspace --locked
 
+      - name: Dump measure report on failure
+        if: failure()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import glob, tempfile, pathlib
+          root = pathlib.Path(tempfile.gettempdir())
+          for p in glob.glob(str(root / "rradar-measure-*" / "measure-report.json")):
+              print("==", p)
+              print(pathlib.Path(p).read_text(encoding="utf-8"))
+          PY
+
       - name: ffi surface
         run: cargo test -p rradar-ffi --locked
 
