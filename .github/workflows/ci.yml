@@ -41,7 +41,13 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          find "${TMPDIR:-/tmp}" -maxdepth 2 -name "measure-report.json" -print -exec cat {} ';' 2>/dev/null || true
+          python3 - <<'PY'
+          import glob, tempfile, pathlib
+          root = pathlib.Path(tempfile.gettempdir())
+          for p in glob.glob(str(root / "rradar-measure-*" / "measure-report.json")):
+              print("==", p)
+              print(pathlib.Path(p).read_text(encoding="utf-8"))
+          PY
 
       - name: ffi surface
         run: cargo test -p rradar-ffi --locked
