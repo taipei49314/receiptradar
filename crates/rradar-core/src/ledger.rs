@@ -12,6 +12,7 @@ use rusqlite::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
 /// Latest ledger schema this binary knows how to open and migrate **to**.
@@ -24,6 +25,9 @@ const TX_COLS: &str = r#"id, confirmed_at, transacted_at, merchant, amount_minor
 
 /// Active (not soft-deleted) rows — schema v4+.
 const ACTIVE: &str = "(deleted_at IS NULL)";
+
+const LEDGER_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+const LEDGER_LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(10);
 
 const SCHEMA_BASE: &str = r#"
 PRAGMA journal_mode=WAL;
@@ -258,6 +262,17 @@ fn post_commit_cleanup_failure(
     }
 }
 
+fn is_transient_sqlite_lock(error: &LedgerError) -> bool {
+    matches!(
+        error,
+        LedgerError::Sqlite(rusqlite::Error::SqliteFailure(code, _))
+            if matches!(
+                code.code,
+                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+            )
+    )
+}
+
 impl Ledger {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, LedgerError> {
         let path = path.as_ref().to_path_buf();
@@ -267,13 +282,14 @@ impl Ledger {
             }
         }
         let conn = Connection::open(&path)?;
+        conn.busy_timeout(LEDGER_BUSY_TIMEOUT)?;
         let mut ledger = Self {
             conn,
             attachment_db_path: path.clone(),
             path,
             sealed_purge: None,
         };
-        ledger.migrate()?;
+        ledger.migrate_with_retry()?;
         Ok(ledger)
     }
 
@@ -285,7 +301,7 @@ impl Ledger {
             attachment_db_path: PathBuf::from(":memory:"),
             sealed_purge: None,
         };
-        ledger.migrate()?;
+        ledger.migrate_with_retry()?;
         Ok(ledger)
     }
 
@@ -379,6 +395,24 @@ impl Ledger {
     }
 
     /// Apply base DDL + forward migrations up to [`LEDGER_SCHEMA_VERSION`].
+    fn migrate_with_retry(&mut self) -> Result<(), LedgerError> {
+        // Fresh-schema lock upgrades can return LOCKED without invoking SQLite's
+        // busy handler, so retry only the transient lock results here.
+        let started = Instant::now();
+        loop {
+            match self.migrate() {
+                Ok(()) => return Ok(()),
+                Err(error)
+                    if is_transient_sqlite_lock(&error)
+                        && started.elapsed() < LEDGER_BUSY_TIMEOUT =>
+                {
+                    std::thread::sleep(LEDGER_LOCK_RETRY_INTERVAL);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
     fn migrate(&mut self) -> Result<(), LedgerError> {
         self.conn.execute_batch(SCHEMA_BASE)?;
         // Fresh DBs: start at v1 meta, then step forward.
@@ -1502,6 +1536,79 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let ledger = Ledger::open(dir.join("ledger.db")).unwrap();
         (dir, ledger)
+    }
+
+    #[test]
+    fn disk_ledger_waits_for_a_short_lived_writer_lock() {
+        use std::sync::mpsc;
+
+        let (dir, ledger) = disk_ledger("busy-timeout");
+        let writer_lock =
+            SqliteTransaction::new_unchecked(ledger.connection(), TransactionBehavior::Immediate)
+                .unwrap();
+        let path = ledger.path().to_path_buf();
+        let (started_tx, started_rx) = mpsc::channel();
+        let writer = std::thread::spawn(move || -> Result<ConfirmResult, LedgerError> {
+            started_tx.send(()).unwrap();
+            let contender = Ledger::open(path)?;
+            contender.confirm_draft(
+                &sample_draft("concurrent-writer", None, 100),
+                None,
+                None,
+                true,
+            )
+        });
+
+        started_rx.recv().unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        writer_lock.commit().unwrap();
+
+        let result = writer.join().unwrap().unwrap();
+        assert!(result.inserted);
+        assert_eq!(ledger.count().unwrap(), 1);
+        drop(ledger);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn concurrent_fresh_disk_ledgers_migrate_and_write() {
+        use std::sync::{Arc, Barrier};
+
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "rradar-ledger-concurrent-fresh-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ledger.db");
+        let barrier = Arc::new(Barrier::new(2));
+        let writers: Vec<_> = (0..2)
+            .map(|index| {
+                let path = path.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || -> Result<ConfirmResult, LedgerError> {
+                    barrier.wait();
+                    let ledger = Ledger::open(path)?;
+                    ledger.confirm_draft(
+                        &sample_draft(&format!("concurrent-{index}"), None, 100 + index),
+                        None,
+                        None,
+                        true,
+                    )
+                })
+            })
+            .collect();
+
+        for writer in writers {
+            assert!(writer.join().unwrap().unwrap().inserted);
+        }
+        let ledger = Ledger::open(&path).unwrap();
+        assert_eq!(ledger.count().unwrap(), 2);
+        drop(ledger);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     fn attach(ledger: &Ledger, id: &str, filename: &str) -> String {
