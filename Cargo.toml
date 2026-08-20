@@ -20,7 +20,7 @@ version = "0.1.0-alpha.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/taipei49314/receiptradar"
-rust-version = "1.78"
+rust-version = "1.88"
 authors = ["ReceiptRadar Contributors"]
 
 [workspace.dependencies]
@@ -32,13 +32,13 @@ thiserror = "2"
 anyhow = "1"
 ulid = { version = "1", features = ["serde"] }
 regex = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 hex = "0.4"
 rusqlite = { version = "0.32", features = ["bundled"] }
-chacha20poly1305 = "0.10"
+chacha20poly1305 = "0.11"
 argon2 = "0.5"
-hkdf = "0.12"
-rand = "0.8"
+hkdf = "0.13"
+rand = "0.9"
 zeroize = { version = "1", features = ["derive"] }
 
 [profile.release]
