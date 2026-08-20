@@ -2,7 +2,7 @@
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
+use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use hkdf::Hkdf;
 use rand::RngCore;
 use sha2::Sha256;
@@ -40,7 +40,7 @@ pub struct Dek([u8; 32]);
 impl Dek {
     pub fn generate() -> Self {
         let mut k = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut k);
+        rand::rng().fill_bytes(&mut k);
         Self(k)
     }
 
@@ -55,7 +55,7 @@ impl Dek {
 
 pub fn random_bytes<const N: usize>() -> [u8; N] {
     let mut b = [0u8; N];
-    rand::thread_rng().fill_bytes(&mut b);
+    rand::rng().fill_bytes(&mut b);
     b
 }
 
@@ -93,8 +93,8 @@ pub fn aead_encrypt(
     plaintext: &[u8],
     aad: &[u8],
 ) -> Result<Vec<u8>, CryptoError> {
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
-    let n = XNonce::from_slice(nonce);
+    let cipher = XChaCha20Poly1305::new(key.into());
+    let n: &XNonce = nonce.into();
     cipher
         .encrypt(
             n,
@@ -112,8 +112,8 @@ pub fn aead_decrypt(
     ciphertext: &[u8],
     aad: &[u8],
 ) -> Result<Vec<u8>, CryptoError> {
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
-    let n = XNonce::from_slice(nonce);
+    let cipher = XChaCha20Poly1305::new(key.into());
+    let n: &XNonce = nonce.into();
     cipher
         .decrypt(
             n,
@@ -226,5 +226,25 @@ mod tests {
         let c = blob_key(&dek, "id2").unwrap();
         assert_eq!(a, b);
         assert_ne!(a, c);
+    }
+
+    #[test]
+    fn legacy_crypto_vectors_are_stable() {
+        let dek = Dek::from_bytes([7u8; 32]);
+        assert_eq!(
+            hex::encode(blob_key(&dek, "id1").unwrap()),
+            "5b8575d6de47d3fe5a1c41c6017e6d490685db007be97c923f213232c7bbbe10"
+        );
+
+        let ciphertext =
+            aead_encrypt(&[0x11; 32], &[0x22; 24], b"receipt-v1", BACKUP_MAGIC).unwrap();
+        assert_eq!(
+            hex::encode(&ciphertext),
+            "f102846935c990b9937cb728fd67058195b70e83c6d74359ad23"
+        );
+        assert_eq!(
+            aead_decrypt(&[0x11; 32], &[0x22; 24], &ciphertext, BACKUP_MAGIC).unwrap(),
+            b"receipt-v1"
+        );
     }
 }

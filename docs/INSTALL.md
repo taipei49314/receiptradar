@@ -4,7 +4,7 @@ Local-first. No account. Core path works offline.
 
 ## Option A — From source (recommended for contributors)
 
-**Requirements:** Rust 1.78+ ([rustup](https://rustup.rs/)), C toolchain for `rusqlite` bundled SQLite.
+**Requirements:** Rust 1.88+ ([rustup](https://rustup.rs/)), C toolchain for `rusqlite` bundled SQLite.
 
 ```bash
 git clone https://github.com/taipei49314/receiptradar.git
